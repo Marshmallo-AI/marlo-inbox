@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     LANGGRAPH_API_URL: str = "http://localhost:54367"
 
     # Marlo
-    MARLO_API_KEY: str = ""
+    MARLO_API_KEY: str
 
     # LangSmith
     LANGSMITH_API_KEY: str = ""
