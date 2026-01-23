@@ -10,30 +10,30 @@ An open-source LangGraph agent that manages your Gmail inbox and Google Calendar
 - **Calendar Management**: View schedule, check availability, create events
 - **Natural Conversation**: Just chat to manage your inbox
 - **Secure Authentication**: Auth0 handles login and Google token management
-- **Observable AI**: Marlo tracks agent behavior and enables learning
+- **Continual Learning**: Marlo tracks agent behavior and enables learning
 
 ## Architecture
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│                   LangGraph Studio                   │
+│                   LangGraph Studio                  │
 └─────────────────────────┬───────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────┐
-│                      FastAPI                         │
-│  • Auth0 session management                          │
-│  • LangGraph proxy                                   │
+│                      FastAPI                        │
+│  • Auth0 session management                         │
+│  • LangGraph proxy                                  │
 └─────────────────────────┬───────────────────────────┘
                           │
 ┌─────────────────────────▼───────────────────────────┐
-│                  LangGraph Agent                     │
-│  • 5 Email tools (Gmail API)                         │
-│  • 5 Calendar tools (Google Calendar API)            │
+│                  LangGraph Agent                    │
+│  • 5 Email tools (Gmail API)                        │
+│  • 5 Calendar tools (Google Calendar API)           │
 └──────────┬──────────────┬───────────────┬───────────┘
            │              │               │
     ┌──────▼──────┐ ┌─────▼─────┐ ┌───────▼───────┐
     │    Auth0    │ │  Google   │ │     Marlo     │
-    │ Token Vault │ │   APIs    │ │  Observability│
+    │ Token Vault │ │   APIs    │ │  learnnings   │
     └─────────────┘ └───────────┘ └───────────────┘
 ```
 

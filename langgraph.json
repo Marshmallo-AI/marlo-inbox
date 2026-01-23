@@ -1,7 +1,7 @@
 {
   "python_version": "3.11",
   "graphs": {
-    "inbox": "./backend/app/agents/inbox.py:agent"
+    "inbox": "./py-inbox/app/agents/inbox.py:agent"
   },
   "env": ".env",
   "dependencies": ["./"]
