@@ -15,7 +15,7 @@
     "@langchain/langgraph": "^0.4.6",
     "@langchain/langgraph-sdk": "^0.0.109",
     "@langchain/openai": "^0.6.1",
-    "@marlo/sdk": "^0.1.0",
+    "@marshmallo/marlo": "^0.1.1",
     "date-fns": "^4.1.0",
     "googleapis": "^161.0.0",
     "jose": "^6.1.0",
