@@ -4,13 +4,11 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from auth0_ai_langchain.token_vault import get_access_token_from_token_vault
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.agents.tools import track_tool_call
-from app.core.auth0_ai import with_calendar_access
-from app.services.calendar import CalendarService
+from app.core.google_tools import get_calendar_service, require_google_auth
 
 logger = logging.getLogger(__name__)
 
@@ -41,13 +39,6 @@ class CreateEventInput(BaseModel):
 
 class DeleteEventInput(BaseModel):
     event_id: str = Field(..., description="Google Calendar event ID")
-
-
-def _get_calendar_service() -> CalendarService:
-    google_access_token = get_access_token_from_token_vault()
-    if not google_access_token:
-        raise ValueError("Authorization required to access the Token Vault API")
-    return CalendarService(google_access_token)
 
 
 def _parse_date(value: str) -> date:
@@ -103,10 +94,11 @@ def _format_event(event: dict[str, Any]) -> str:
     return " - ".join(parts)
 
 
+@require_google_auth
 async def _get_schedule(date: str, days: int = 1) -> str:
     tool_input = {"date": date, "days": days}
     try:
-        service = _get_calendar_service()
+        service = get_calendar_service()
         start_date = _parse_date(date)
         span = max(days, 1)
         start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
@@ -128,10 +120,11 @@ async def _get_schedule(date: str, days: int = 1) -> str:
         raise
 
 
+@require_google_auth
 async def _check_availability(start_time: str, end_time: str) -> str:
     tool_input = {"start_time": start_time, "end_time": end_time}
     try:
-        service = _get_calendar_service()
+        service = get_calendar_service()
         time_min = _ensure_rfc3339(start_time)
         time_max = _ensure_rfc3339(end_time)
         freebusy = service.get_freebusy(time_min=time_min, time_max=time_max)
@@ -152,10 +145,11 @@ async def _check_availability(start_time: str, end_time: str) -> str:
         raise
 
 
+@require_google_auth
 async def _find_free_slots(date: str, duration_minutes: int = 30) -> str:
     tool_input = {"date": date, "duration_minutes": duration_minutes}
     try:
-        service = _get_calendar_service()
+        service = get_calendar_service()
         target_date = _parse_date(date)
         working_start = time(hour=9, minute=0)
         working_end = time(hour=18, minute=0)
@@ -203,6 +197,7 @@ async def _find_free_slots(date: str, duration_minutes: int = 30) -> str:
         raise
 
 
+@require_google_auth
 async def _create_event(
     title: str,
     start_time: str,
@@ -220,7 +215,7 @@ async def _create_event(
         "location": location,
     }
     try:
-        service = _get_calendar_service()
+        service = get_calendar_service()
         event = {
             "summary": title,
             "start": _build_event_time(start_time),
@@ -260,10 +255,11 @@ def _build_event_time(value: str) -> dict[str, str]:
     return {"dateTime": _ensure_rfc3339(value)}
 
 
+@require_google_auth
 async def _delete_event(event_id: str) -> str:
     tool_input = {"event_id": event_id}
     try:
-        service = _get_calendar_service()
+        service = get_calendar_service()
         service.delete_event(event_id=event_id)
         result = f"Deleted event {event_id}."
         track_tool_call("delete_event", tool_input, result)
@@ -274,56 +270,46 @@ async def _delete_event(event_id: str) -> str:
         raise
 
 
-get_schedule = with_calendar_access(
-    StructuredTool(
-        name="get_schedule",
-        description=(
-            "Get calendar events for a specific date or date range. "
-            "Date format: YYYY-MM-DD"
-        ),
-        args_schema=GetScheduleInput,
-        coroutine=_get_schedule,
-    )
+get_schedule = StructuredTool(
+    name="get_schedule",
+    description=(
+        "Get calendar events for a specific date or date range. "
+        "Date format: YYYY-MM-DD"
+    ),
+    args_schema=GetScheduleInput,
+    coroutine=_get_schedule,
 )
 
-check_availability = with_calendar_access(
-    StructuredTool(
-        name="check_availability",
-        description=(
-            "Check if a specific time slot is free or has conflicts. "
-            "Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"
-        ),
-        args_schema=CheckAvailabilityInput,
-        coroutine=_check_availability,
-    )
+check_availability = StructuredTool(
+    name="check_availability",
+    description=(
+        "Check if a specific time slot is free or has conflicts. "
+        "Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"
+    ),
+    args_schema=CheckAvailabilityInput,
+    coroutine=_check_availability,
 )
 
-find_free_slots = with_calendar_access(
-    StructuredTool(
-        name="find_free_slots",
-        description=(
-            "Find available time slots on a given date for a meeting of specified "
-            "duration"
-        ),
-        args_schema=FindFreeSlotsInput,
-        coroutine=_find_free_slots,
-    )
+find_free_slots = StructuredTool(
+    name="find_free_slots",
+    description=(
+        "Find available time slots on a given date for a meeting of specified "
+        "duration"
+    ),
+    args_schema=FindFreeSlotsInput,
+    coroutine=_find_free_slots,
 )
 
-create_event = with_calendar_access(
-    StructuredTool(
-        name="create_event",
-        description="Create a new calendar event. Optionally invite attendees by email.",
-        args_schema=CreateEventInput,
-        coroutine=_create_event,
-    )
+create_event = StructuredTool(
+    name="create_event",
+    description="Create a new calendar event. Optionally invite attendees by email.",
+    args_schema=CreateEventInput,
+    coroutine=_create_event,
 )
 
-delete_event = with_calendar_access(
-    StructuredTool(
-        name="delete_event",
-        description="Delete or cancel a calendar event by ID",
-        args_schema=DeleteEventInput,
-        coroutine=_delete_event,
-    )
+delete_event = StructuredTool(
+    name="delete_event",
+    description="Delete or cancel a calendar event by ID",
+    args_schema=DeleteEventInput,
+    coroutine=_delete_event,
 )

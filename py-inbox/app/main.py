@@ -8,11 +8,10 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 
 from app.api.router import api_router
-from app.core.auth import auth_client
 from app.core.config import settings
 
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.DEBUG,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger(__name__)
@@ -31,8 +30,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"Failed to initialize Marlo: {e}")
 
-    app.state.auth_client = auth_client
-
     yield
 
     logger.info(f"Shutting down {settings.APP_NAME}")
@@ -48,7 +45,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title=settings.APP_NAME,
-    description="AI email & calendar assistant powered by Marlo and Auth0",
+    description="AI email & calendar assistant powered by Marlo",
     version="0.1.0",
     lifespan=lifespan,
 )
@@ -63,7 +60,9 @@ app.add_middleware(
 
 app.add_middleware(
     SessionMiddleware,
-    secret_key=settings.AUTH0_SECRET,
+    secret_key=settings.SESSION_SECRET,
+    same_site="lax",
+    https_only=False,
 )
 
 app.include_router(api_router, prefix=settings.API_PREFIX)

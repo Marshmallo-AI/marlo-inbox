@@ -7,24 +7,24 @@ import httpx
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
-from app.core.auth import auth_client
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
+SESSION_KEY_TOKENS = "google_tokens"
+SESSION_KEY_USER = "user"
+
 
 def _get_credentials_from_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Extract credentials from Auth0 session for agent config."""
-    token_sets = session.get("token_sets", [])
-    access_token = token_sets[0].get("access_token") if token_sets else None
-    refresh_token = session.get("refresh_token")
-    user = session.get("user", {})
+    """Extract Google credentials from session for agent config."""
+    tokens = session.get(SESSION_KEY_TOKENS, {})
+    user = session.get(SESSION_KEY_USER, {})
 
     return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
+        "access_token": tokens.get("access_token"),
+        "refresh_token": tokens.get("refresh_token"),
         "user": user,
     }
 
@@ -35,8 +35,7 @@ async def stream_chat(request: Request):
     Stream chat messages to the LangGraph agent.
     Proxies requests to the LangGraph server with injected credentials.
     """
-    session = await auth_client.get_session(request)
-    if not session:
+    if SESSION_KEY_USER not in request.session:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
@@ -46,7 +45,7 @@ async def stream_chat(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    credentials = _get_credentials_from_session(session)
+    credentials = _get_credentials_from_session(dict(request.session))
 
     langgraph_payload = {
         "input": {"messages": messages},
@@ -82,8 +81,7 @@ async def invoke_chat(request: Request):
     Invoke chat without streaming.
     Returns complete response after agent finishes.
     """
-    session = await auth_client.get_session(request)
-    if not session:
+    if SESSION_KEY_USER not in request.session:
         raise HTTPException(status_code=401, detail="Not authenticated")
 
     body = await request.json()
@@ -93,7 +91,7 @@ async def invoke_chat(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    credentials = _get_credentials_from_session(session)
+    credentials = _get_credentials_from_session(dict(request.session))
 
     langgraph_payload = {
         "input": {"messages": messages},

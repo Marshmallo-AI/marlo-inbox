@@ -7,13 +7,11 @@ Gmail tools for marlo-inbox agent.
 from email.utils import parseaddr
 from typing import Any
 
-from auth0_ai_langchain.token_vault import get_access_token_from_token_vault
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from app.agents.tools import track_tool_call
-from app.core.auth0_ai import with_gmail_access
-from app.services.gmail import GmailService
+from app.core.google_tools import get_gmail_service, require_google_auth
 
 
 class ListEmailsInput(BaseModel):
@@ -41,10 +39,11 @@ class SendEmailInput(BaseModel):
     reply_to_id: str | None = None
 
 
+@require_google_auth
 async def _list_emails(max_results: int = 10) -> str:
     tool_input = {"max_results": max_results}
     try:
-        service = _get_gmail_service()
+        service = get_gmail_service()
         emails = service.list_messages(max_results=max_results)
         result = _format_email_list(emails)
         track_tool_call(name="list_emails", tool_input=tool_input, tool_output=result)
@@ -59,10 +58,11 @@ async def _list_emails(max_results: int = 10) -> str:
         raise
 
 
+@require_google_auth
 async def _get_email(email_id: str) -> str:
     tool_input = {"email_id": email_id}
     try:
-        service = _get_gmail_service()
+        service = get_gmail_service()
         email_data = service.get_message(message_id=email_id, include_thread=True)
         result = _format_full_email(email_data)
         track_tool_call(name="get_email", tool_input=tool_input, tool_output=result)
@@ -77,10 +77,11 @@ async def _get_email(email_id: str) -> str:
         raise
 
 
+@require_google_auth
 async def _search_emails(query: str, max_results: int = 10) -> str:
     tool_input = {"query": query, "max_results": max_results}
     try:
-        service = _get_gmail_service()
+        service = get_gmail_service()
         emails = service.search_messages(query=query, max_results=max_results)
         result = _format_email_list(emails)
         track_tool_call(name="search_emails", tool_input=tool_input, tool_output=result)
@@ -95,10 +96,11 @@ async def _search_emails(query: str, max_results: int = 10) -> str:
         raise
 
 
+@require_google_auth
 async def _draft_reply(email_id: str, instructions: str) -> str:
     tool_input = {"email_id": email_id, "instructions": instructions}
     try:
-        service = _get_gmail_service()
+        service = get_gmail_service()
         email_data = service.get_message(message_id=email_id, include_thread=False)
         message = email_data["message"]
         draft = _build_draft_reply(message, instructions)
@@ -114,6 +116,7 @@ async def _draft_reply(email_id: str, instructions: str) -> str:
         raise
 
 
+@require_google_auth
 async def _send_email(
     to: str,
     subject: str,
@@ -127,7 +130,7 @@ async def _send_email(
         "reply_to_id": reply_to_id,
     }
     try:
-        service = _get_gmail_service()
+        service = get_gmail_service()
         thread_id = None
         in_reply_to = None
         references = None
@@ -159,13 +162,6 @@ async def _send_email(
             error=str(exc),
         )
         raise
-
-
-def _get_gmail_service() -> GmailService:
-    access_token = get_access_token_from_token_vault()
-    if not access_token:
-        raise ValueError("Authorization required to access the Token Vault API")
-    return GmailService(access_token)
 
 
 def _format_email_list(emails: list[dict[str, Any]]) -> str:
@@ -245,47 +241,37 @@ def _reply_subject(subject: str) -> str:
     return f"Re: {subject}".strip()
 
 
-list_emails = with_gmail_access(
-    StructuredTool(
-        name="list_emails",
-        description="List recent emails from the user's Gmail inbox",
-        args_schema=ListEmailsInput,
-        coroutine=_list_emails,
-    )
+list_emails = StructuredTool(
+    name="list_emails",
+    description="List recent emails from the user's Gmail inbox",
+    args_schema=ListEmailsInput,
+    coroutine=_list_emails,
 )
 
-get_email = with_gmail_access(
-    StructuredTool(
-        name="get_email",
-        description="Get the full content of a specific email by ID, including the conversation thread",
-        args_schema=GetEmailInput,
-        coroutine=_get_email,
-    )
+get_email = StructuredTool(
+    name="get_email",
+    description="Get the full content of a specific email by ID, including the conversation thread",
+    args_schema=GetEmailInput,
+    coroutine=_get_email,
 )
 
-search_emails = with_gmail_access(
-    StructuredTool(
-        name="search_emails",
-        description="Search emails by query (sender, subject, content). Uses Gmail search syntax.",
-        args_schema=SearchEmailsInput,
-        coroutine=_search_emails,
-    )
+search_emails = StructuredTool(
+    name="search_emails",
+    description="Search emails by query (sender, subject, content). Uses Gmail search syntax.",
+    args_schema=SearchEmailsInput,
+    coroutine=_search_emails,
 )
 
-draft_reply = with_gmail_access(
-    StructuredTool(
-        name="draft_reply",
-        description="Generate a reply draft for an email based on user instructions",
-        args_schema=DraftReplyInput,
-        coroutine=_draft_reply,
-    )
+draft_reply = StructuredTool(
+    name="draft_reply",
+    description="Generate a reply draft for an email based on user instructions",
+    args_schema=DraftReplyInput,
+    coroutine=_draft_reply,
 )
 
-send_email = with_gmail_access(
-    StructuredTool(
-        name="send_email",
-        description="Send an email or reply. If reply_to_id is provided, sends as a reply to that email thread.",
-        args_schema=SendEmailInput,
-        coroutine=_send_email,
-    )
+send_email = StructuredTool(
+    name="send_email",
+    description="Send an email or reply. If reply_to_id is provided, sends as a reply to that email thread.",
+    args_schema=SendEmailInput,
+    coroutine=_send_email,
 )
