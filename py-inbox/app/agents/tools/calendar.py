@@ -1,44 +1,25 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
-from app.agents.tools import track_tool_call
-from app.core.google_tools import get_calendar_service
+from app.core.google_tools import get_access_token_from_config, GoogleAuthError
+from app.services.calendar import CalendarService
 
 logger = logging.getLogger(__name__)
 
 
-class GetScheduleInput(BaseModel):
-    date: str = Field(..., description="Start date in YYYY-MM-DD format")
-    days: int = Field(1, description="Number of days to include")
-
-
-class CheckAvailabilityInput(BaseModel):
-    start_time: str = Field(..., description="Start time in ISO 8601 format")
-    end_time: str = Field(..., description="End time in ISO 8601 format")
-
-
-class FindFreeSlotsInput(BaseModel):
-    date: str = Field(..., description="Date in YYYY-MM-DD format")
-    duration_minutes: int = Field(30, description="Meeting duration in minutes")
-
-
-class CreateEventInput(BaseModel):
-    title: str = Field(..., description="Event title")
-    start_time: str = Field(..., description="Event start time in ISO 8601 format")
-    end_time: str = Field(..., description="Event end time in ISO 8601 format")
-    attendees: list[str] | None = Field(None, description="Attendee email addresses")
-    description: str | None = Field(None, description="Event description")
-    location: str | None = Field(None, description="Event location")
-
-
-class DeleteEventInput(BaseModel):
-    event_id: str = Field(..., description="Google Calendar event ID")
+def _get_calendar_service(config: RunnableConfig) -> CalendarService:
+    """Get Calendar service - must be called within asyncio.to_thread."""
+    access_token = get_access_token_from_config(config)
+    if not access_token:
+        raise GoogleAuthError("Not authenticated. Please log in first.")
+    return CalendarService(access_token)
 
 
 def _parse_date(value: str) -> date:
@@ -94,217 +75,150 @@ def _format_event(event: dict[str, Any]) -> str:
     return " - ".join(parts)
 
 
-async def _get_schedule(date: str, days: int = 1) -> str:
-    tool_input = {"date": date, "days": days}
-    try:
-        service = get_calendar_service()
-        start_date = _parse_date(date)
-        span = max(days, 1)
-        start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
-        end_dt = start_dt + timedelta(days=span)
-        time_min = start_dt.isoformat().replace("+00:00", "Z")
-        time_max = end_dt.isoformat().replace("+00:00", "Z")
-        events = service.list_events(time_min=time_min, time_max=time_max)
-        if not events:
-            result = f"No events found from {start_date} for {span} day(s)."
-        else:
-            header = f"Schedule from {start_date} for {span} day(s):"
-            formatted = "\n".join(_format_event(event) for event in events)
-            result = f"{header}\n{formatted}"
-        track_tool_call(name="get_schedule", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        error = str(exc)
-        track_tool_call(name="get_schedule", tool_input=tool_input, tool_output=None, error=error)
-        raise
-
-
-async def _check_availability(start_time: str, end_time: str) -> str:
-    tool_input = {"start_time": start_time, "end_time": end_time}
-    try:
-        service = get_calendar_service()
-        time_min = _ensure_rfc3339(start_time)
-        time_max = _ensure_rfc3339(end_time)
-        freebusy = service.get_freebusy(time_min=time_min, time_max=time_max)
-        busy_times = freebusy.get("calendars", {}).get("primary", {}).get("busy", [])
-        if not busy_times:
-            result = f"Free from {time_min} to {time_max}."
-        else:
-            conflicts = ", ".join(
-                f"{_format_datetime(item['start'])} to {_format_datetime(item['end'])}"
-                for item in busy_times
-            )
-            result = f"Not available. Conflicts: {conflicts}."
-        track_tool_call(name="check_availability", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        error = str(exc)
-        track_tool_call(name="check_availability", tool_input=tool_input, tool_output=None, error=error)
-        raise
-
-
-async def _find_free_slots(date: str, duration_minutes: int = 30) -> str:
-    tool_input = {"date": date, "duration_minutes": duration_minutes}
-    try:
-        service = get_calendar_service()
-        target_date = _parse_date(date)
-        working_start = time(hour=9, minute=0)
-        working_end = time(hour=18, minute=0)
-        start_dt = datetime.combine(target_date, working_start, tzinfo=timezone.utc)
-        end_dt = datetime.combine(target_date, working_end, tzinfo=timezone.utc)
-        time_min = start_dt.isoformat().replace("+00:00", "Z")
-        time_max = end_dt.isoformat().replace("+00:00", "Z")
-        freebusy = service.get_freebusy(time_min=time_min, time_max=time_max)
-        busy_times = freebusy.get("calendars", {}).get("primary", {}).get("busy", [])
-        busy_ranges = [
-            (
-                _parse_rfc3339(item["start"]),
-                _parse_rfc3339(item["end"]),
-            )
-            for item in busy_times
-        ]
-        busy_ranges.sort(key=lambda item: item[0])
-
-        free_slots: list[tuple[datetime, datetime]] = []
-        cursor = start_dt
-        duration = timedelta(minutes=max(duration_minutes, 1))
-        for busy_start, busy_end in busy_ranges:
-            if busy_start > cursor and busy_start - cursor >= duration:
-                free_slots.append((cursor, busy_start))
-            if busy_end > cursor:
-                cursor = busy_end
-        if end_dt > cursor and end_dt - cursor >= duration:
-            free_slots.append((cursor, end_dt))
-
-        if not free_slots:
-            result = f"No free slots on {date} for {duration_minutes} minutes."
-        else:
-            slots = "\n".join(
-                f"{slot_start.isoformat().replace('+00:00', 'Z')} to {slot_end.isoformat().replace('+00:00', 'Z')}"
-                for slot_start, slot_end in free_slots
-            )
-            result = (
-                f"Free slots on {date} for {duration_minutes} minutes:\n{slots}"
-            )
-        track_tool_call(name="find_free_slots", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        error = str(exc)
-        track_tool_call(name="find_free_slots", tool_input=tool_input, tool_output=None, error=error)
-        raise
-
-
-async def _create_event(
-    title: str,
-    start_time: str,
-    end_time: str,
-    attendees: list[str] | None = None,
-    description: str | None = None,
-    location: str | None = None,
-) -> str:
-    tool_input = {
-        "title": title,
-        "start_time": start_time,
-        "end_time": end_time,
-        "attendees": attendees,
-        "description": description,
-        "location": location,
-    }
-    try:
-        service = get_calendar_service()
-        event = {
-            "summary": title,
-            "start": _build_event_time(start_time),
-            "end": _build_event_time(end_time),
-        }
-        if attendees:
-            event["attendees"] = [{"email": email} for email in attendees]
-        if description:
-            event["description"] = description
-        if location:
-            event["location"] = location
-
-        created = service.create_event(
-            event=event,
-            send_updates="all" if attendees else "none",
-        )
-        event_id = created.get("id", "")
-        result = (
-            "Event created: "
-            f"{title} ({_format_datetime(start_time)} to {_format_datetime(end_time)})"
-        )
-        if attendees:
-            result = f"{result} with attendees: {', '.join(attendees)}"
-        if event_id:
-            result = f"{result}. Event ID: {event_id}."
-        track_tool_call(name="create_event", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        error = str(exc)
-        track_tool_call(name="create_event", tool_input=tool_input, tool_output=None, error=error)
-        raise
-
-
 def _build_event_time(value: str) -> dict[str, str]:
     if "T" not in value:
         return {"date": value}
     return {"dateTime": _ensure_rfc3339(value)}
 
 
-async def _delete_event(event_id: str) -> str:
-    tool_input = {"event_id": event_id}
-    try:
-        service = get_calendar_service()
-        service.delete_event(event_id=event_id)
-        result = f"Deleted event {event_id}."
-        track_tool_call(name="delete_event", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        error = str(exc)
-        track_tool_call(name="delete_event", tool_input=tool_input, tool_output=None, error=error)
-        raise
+def _get_schedule_sync(config: RunnableConfig, time_min: str, time_max: str) -> list[dict[str, Any]]:
+    """Synchronous wrapper for get_schedule."""
+    service = _get_calendar_service(config)
+    return service.list_events(time_min=time_min, time_max=time_max)
 
 
-get_schedule = StructuredTool(
-    name="get_schedule",
-    description=(
-        "Get calendar events for a specific date or date range. "
-        "Date format: YYYY-MM-DD"
-    ),
-    args_schema=GetScheduleInput,
-    coroutine=_get_schedule,
-)
+def _check_availability_sync(config: RunnableConfig, time_min: str, time_max: str) -> dict[str, Any]:
+    """Synchronous wrapper for check_availability."""
+    service = _get_calendar_service(config)
+    return service.get_freebusy(time_min=time_min, time_max=time_max)
 
-check_availability = StructuredTool(
-    name="check_availability",
-    description=(
-        "Check if a specific time slot is free or has conflicts. "
-        "Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"
-    ),
-    args_schema=CheckAvailabilityInput,
-    coroutine=_check_availability,
-)
 
-find_free_slots = StructuredTool(
-    name="find_free_slots",
-    description=(
-        "Find available time slots on a given date for a meeting of specified "
-        "duration"
-    ),
-    args_schema=FindFreeSlotsInput,
-    coroutine=_find_free_slots,
-)
+def _create_event_sync(config: RunnableConfig, event: dict[str, Any], send_updates: str) -> dict[str, Any]:
+    """Synchronous wrapper for create_event."""
+    service = _get_calendar_service(config)
+    return service.create_event(event=event, send_updates=send_updates)
 
-create_event = StructuredTool(
-    name="create_event",
-    description="Create a new calendar event. Optionally invite attendees by email.",
-    args_schema=CreateEventInput,
-    coroutine=_create_event,
-)
 
-delete_event = StructuredTool(
-    name="delete_event",
-    description="Delete or cancel a calendar event by ID",
-    args_schema=DeleteEventInput,
-    coroutine=_delete_event,
-)
+def _delete_event_sync(config: RunnableConfig, event_id: str) -> None:
+    """Synchronous wrapper for delete_event."""
+    service = _get_calendar_service(config)
+    service.delete_event(event_id=event_id)
+
+
+@tool
+async def get_schedule(date: str, days: int = 1, *, config: RunnableConfig) -> str:
+    """Get calendar events for a specific date or date range. Date format: YYYY-MM-DD"""
+    start_date = _parse_date(date)
+    span = max(days, 1)
+    start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    end_dt = start_dt + timedelta(days=span)
+    time_min = start_dt.isoformat().replace("+00:00", "Z")
+    time_max = end_dt.isoformat().replace("+00:00", "Z")
+    events = await asyncio.to_thread(_get_schedule_sync, config, time_min, time_max)
+    if not events:
+        return f"No events found from {start_date} for {span} day(s)."
+    header = f"Schedule from {start_date} for {span} day(s):"
+    formatted = "\n".join(_format_event(event) for event in events)
+    return f"{header}\n{formatted}"
+
+
+@tool
+async def check_availability(start_time: str, end_time: str, *, config: RunnableConfig) -> str:
+    """Check if a specific time slot is free or has conflicts. Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"""
+    time_min = _ensure_rfc3339(start_time)
+    time_max = _ensure_rfc3339(end_time)
+    freebusy = await asyncio.to_thread(_check_availability_sync, config, time_min, time_max)
+    busy_times = freebusy.get("calendars", {}).get("primary", {}).get("busy", [])
+    if not busy_times:
+        return f"Free from {time_min} to {time_max}."
+    conflicts = ", ".join(
+        f"{_format_datetime(item['start'])} to {_format_datetime(item['end'])}"
+        for item in busy_times
+    )
+    return f"Not available. Conflicts: {conflicts}."
+
+
+@tool
+async def find_free_slots(date: str, duration_minutes: int = 30, *, config: RunnableConfig) -> str:
+    """Find available time slots on a given date for a meeting of specified duration."""
+    target_date = _parse_date(date)
+    working_start = time(hour=9, minute=0)
+    working_end = time(hour=18, minute=0)
+    start_dt = datetime.combine(target_date, working_start, tzinfo=timezone.utc)
+    end_dt = datetime.combine(target_date, working_end, tzinfo=timezone.utc)
+    time_min = start_dt.isoformat().replace("+00:00", "Z")
+    time_max = end_dt.isoformat().replace("+00:00", "Z")
+    freebusy = await asyncio.to_thread(_check_availability_sync, config, time_min, time_max)
+    busy_times = freebusy.get("calendars", {}).get("primary", {}).get("busy", [])
+    busy_ranges = [
+        (
+            _parse_rfc3339(item["start"]),
+            _parse_rfc3339(item["end"]),
+        )
+        for item in busy_times
+    ]
+    busy_ranges.sort(key=lambda item: item[0])
+
+    free_slots: list[tuple[datetime, datetime]] = []
+    cursor = start_dt
+    duration = timedelta(minutes=max(duration_minutes, 1))
+    for busy_start, busy_end in busy_ranges:
+        if busy_start > cursor and busy_start - cursor >= duration:
+            free_slots.append((cursor, busy_start))
+        if busy_end > cursor:
+            cursor = busy_end
+    if end_dt > cursor and end_dt - cursor >= duration:
+        free_slots.append((cursor, end_dt))
+
+    if not free_slots:
+        return f"No free slots on {date} for {duration_minutes} minutes."
+    slots = "\n".join(
+        f"{slot_start.isoformat().replace('+00:00', 'Z')} to {slot_end.isoformat().replace('+00:00', 'Z')}"
+        for slot_start, slot_end in free_slots
+    )
+    return f"Free slots on {date} for {duration_minutes} minutes:\n{slots}"
+
+
+@tool
+async def create_event(
+    title: str,
+    start_time: str,
+    end_time: str,
+    attendees: list[str] | None = None,
+    description: str | None = None,
+    location: str | None = None,
+    *,
+    config: RunnableConfig,
+) -> str:
+    """Create a new calendar event. Optionally invite attendees by email."""
+    event = {
+        "summary": title,
+        "start": _build_event_time(start_time),
+        "end": _build_event_time(end_time),
+    }
+    if attendees:
+        event["attendees"] = [{"email": email} for email in attendees]
+    if description:
+        event["description"] = description
+    if location:
+        event["location"] = location
+
+    send_updates = "all" if attendees else "none"
+    created = await asyncio.to_thread(_create_event_sync, config, event, send_updates)
+    event_id = created.get("id", "")
+    result = (
+        "Event created: "
+        f"{title} ({_format_datetime(start_time)} to {_format_datetime(end_time)})"
+    )
+    if attendees:
+        result = f"{result} with attendees: {', '.join(attendees)}"
+    if event_id:
+        result = f"{result}. Event ID: {event_id}."
+    return result
+
+
+@tool
+async def delete_event(event_id: str, *, config: RunnableConfig) -> str:
+    """Delete or cancel a calendar event by ID."""
+    await asyncio.to_thread(_delete_event_sync, config, event_id)
+    return f"Deleted event {event_id}."

@@ -8,6 +8,7 @@ from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.core.config import settings
+from app.core.google_oauth import get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,29 @@ SESSION_KEY_TOKENS = "google_tokens"
 SESSION_KEY_USER = "user"
 
 
-def _get_credentials_from_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Extract Google credentials from session for agent config."""
+def _get_credentials_from_session(session: dict[str, Any], request: Request | None = None) -> dict[str, Any]:
+    """Extract Google credentials from session for agent config, refreshing if expired."""
     tokens = session.get(SESSION_KEY_TOKENS, {})
     user = session.get(SESSION_KEY_USER, {})
 
+    if not tokens:
+        return {"access_token": None, "refresh_token": None, "user": user}
+
+    # Check if token needs refresh and refresh if needed
+    access_token, updated_tokens = get_valid_access_token(tokens)
+
+    if updated_tokens:
+        # Token was refreshed - update session with new tokens
+        logger.info("[agent proxy] Access token refreshed successfully")
+        if request is not None:
+            request.session[SESSION_KEY_TOKENS] = updated_tokens
+            tokens = updated_tokens
+        access_token = updated_tokens.get("access_token")
+    elif access_token is None:
+        logger.warning("[agent proxy] Failed to get valid access token - may need to re-authenticate")
+
     return {
-        "access_token": tokens.get("access_token"),
+        "access_token": access_token,
         "refresh_token": tokens.get("refresh_token"),
         "user": user,
     }
@@ -59,7 +76,7 @@ async def proxy_to_langgraph(request: Request, path: str):
     logger.info(f"[agent proxy] Session keys: {list(session_dict.keys())}")
 
     if SESSION_KEY_USER in session_dict:
-        credentials = _get_credentials_from_session(session_dict)
+        credentials = _get_credentials_from_session(session_dict, request)
         has_token = bool(credentials.get("access_token"))
         logger.info(f"[agent proxy] User: {credentials.get('user', {}).get('email', 'unknown')}, has_token: {has_token}")
     else:

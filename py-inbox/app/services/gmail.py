@@ -7,8 +7,22 @@ from typing import Any
 
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
+
+from app.core.google_tools import GoogleAuthError
 
 logger = logging.getLogger(__name__)
+
+
+def _handle_google_error(error: HttpError, operation: str) -> None:
+    """Handle Google API HTTP errors and raise appropriate exceptions."""
+    status = error.resp.status if error.resp else None
+    logger.error(f"[gmail] {operation} failed with status {status}: {error}")
+    if status in (401, 403):
+        raise GoogleAuthError(
+            f"Google authentication failed: {error.reason}. Please log in again."
+        )
+    raise
 
 
 class GmailService:
@@ -21,52 +35,61 @@ class GmailService:
         )
 
     def list_messages(self, max_results: int) -> list[dict[str, Any]]:
-        messages = (
-            self._service.users()
-            .messages()
-            .list(userId="me", labelIds=["INBOX"], maxResults=max_results)
-            .execute()
-            .get("messages", [])
-        )
-        return [self._get_message_metadata(message["id"]) for message in messages]
+        try:
+            messages = (
+                self._service.users()
+                .messages()
+                .list(userId="me", labelIds=["INBOX"], maxResults=max_results)
+                .execute()
+                .get("messages", [])
+            )
+            return [self._get_message_metadata(message["id"]) for message in messages]
+        except HttpError as e:
+            _handle_google_error(e, "list_messages")
 
     def search_messages(self, query: str, max_results: int) -> list[dict[str, Any]]:
-        messages = (
-            self._service.users()
-            .messages()
-            .list(
-                userId="me",
-                q=query,
-                maxResults=max_results,
+        try:
+            messages = (
+                self._service.users()
+                .messages()
+                .list(
+                    userId="me",
+                    q=query,
+                    maxResults=max_results,
+                )
+                .execute()
+                .get("messages", [])
             )
-            .execute()
-            .get("messages", [])
-        )
-        return [self._get_message_metadata(message["id"]) for message in messages]
+            return [self._get_message_metadata(message["id"]) for message in messages]
+        except HttpError as e:
+            _handle_google_error(e, "search_messages")
 
     def get_message(self, message_id: str, include_thread: bool = True) -> dict[str, Any]:
-        message = (
-            self._service.users()
-            .messages()
-            .get(userId="me", id=message_id, format="full")
-            .execute()
-        )
-        parsed_message = _parse_message(message)
-
-        thread_messages = []
-        if include_thread and message.get("threadId"):
-            thread = (
+        try:
+            message = (
                 self._service.users()
-                .threads()
-                .get(userId="me", id=message["threadId"], format="full")
+                .messages()
+                .get(userId="me", id=message_id, format="full")
                 .execute()
             )
-            thread_messages = [_parse_message(item) for item in thread.get("messages", [])]
+            parsed_message = _parse_message(message)
 
-        return {
-            "message": parsed_message,
-            "thread": thread_messages,
-        }
+            thread_messages = []
+            if include_thread and message.get("threadId"):
+                thread = (
+                    self._service.users()
+                    .threads()
+                    .get(userId="me", id=message["threadId"], format="full")
+                    .execute()
+                )
+                thread_messages = [_parse_message(item) for item in thread.get("messages", [])]
+
+            return {
+                "message": parsed_message,
+                "thread": thread_messages,
+            }
+        except HttpError as e:
+            _handle_google_error(e, "get_message")
 
     def send_message(
         self,
@@ -77,52 +100,58 @@ class GmailService:
         in_reply_to: str | None = None,
         references: str | None = None,
     ) -> dict[str, Any]:
-        message = EmailMessage()
-        message["To"] = to
-        message["Subject"] = subject
-        if in_reply_to:
-            message["In-Reply-To"] = in_reply_to
-        if references:
-            message["References"] = references
-        message.set_content(body)
+        try:
+            message = EmailMessage()
+            message["To"] = to
+            message["Subject"] = subject
+            if in_reply_to:
+                message["In-Reply-To"] = in_reply_to
+            if references:
+                message["References"] = references
+            message.set_content(body)
 
-        raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
-        send_body: dict[str, Any] = {"raw": raw_message}
-        if thread_id:
-            send_body["threadId"] = thread_id
+            raw_message = base64.urlsafe_b64encode(message.as_bytes()).decode("utf-8")
+            send_body: dict[str, Any] = {"raw": raw_message}
+            if thread_id:
+                send_body["threadId"] = thread_id
 
-        return (
-            self._service.users()
-            .messages()
-            .send(userId="me", body=send_body)
-            .execute()
-        )
+            return (
+                self._service.users()
+                .messages()
+                .send(userId="me", body=send_body)
+                .execute()
+            )
+        except HttpError as e:
+            _handle_google_error(e, "send_message")
 
     def _get_message_metadata(self, message_id: str) -> dict[str, Any]:
-        message = (
-            self._service.users()
-            .messages()
-            .get(
-                userId="me",
-                id=message_id,
-                format="metadata",
-                metadataHeaders=["From", "To", "Subject", "Date"],
+        try:
+            message = (
+                self._service.users()
+                .messages()
+                .get(
+                    userId="me",
+                    id=message_id,
+                    format="metadata",
+                    metadataHeaders=["From", "To", "Subject", "Date"],
+                )
+                .execute()
             )
-            .execute()
-        )
-        headers = {
-            header["name"]: header.get("value", "")
-            for header in message.get("payload", {}).get("headers", [])
-        }
-        return {
-            "id": message["id"],
-            "thread_id": message.get("threadId", ""),
-            "from": headers.get("From", ""),
-            "to": headers.get("To", ""),
-            "subject": headers.get("Subject", ""),
-            "date": headers.get("Date", ""),
-            "snippet": message.get("snippet", ""),
-        }
+            headers = {
+                header["name"]: header.get("value", "")
+                for header in message.get("payload", {}).get("headers", [])
+            }
+            return {
+                "id": message["id"],
+                "thread_id": message.get("threadId", ""),
+                "from": headers.get("From", ""),
+                "to": headers.get("To", ""),
+                "subject": headers.get("Subject", ""),
+                "date": headers.get("Date", ""),
+                "snippet": message.get("snippet", ""),
+            }
+        except HttpError as e:
+            _handle_google_error(e, "_get_message_metadata")
 
 
 def _parse_message(message: dict[str, Any]) -> dict[str, Any]:

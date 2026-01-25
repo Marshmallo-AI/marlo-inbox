@@ -4,159 +4,128 @@ from __future__ import annotations
 Gmail tools for marlo-inbox agent.
 """
 
+import asyncio
 from email.utils import parseaddr
 from typing import Any
 
-from langchain_core.tools import StructuredTool
-from pydantic import BaseModel
+from langchain_core.runnables import RunnableConfig
+from langchain_core.tools import tool
 
-from app.agents.tools import track_tool_call
-from app.core.google_tools import get_gmail_service
-
-
-class ListEmailsInput(BaseModel):
-    max_results: int = 10
+from app.core.google_tools import get_access_token_from_config, GoogleAuthError
+from app.services.gmail import GmailService
 
 
-class GetEmailInput(BaseModel):
-    email_id: str
+def _get_gmail_service(config: RunnableConfig) -> GmailService:
+    """Get Gmail service - must be called within asyncio.to_thread."""
+    access_token = get_access_token_from_config(config)
+    if not access_token:
+        raise GoogleAuthError("Not authenticated. Please log in first.")
+    return GmailService(access_token)
 
 
-class SearchEmailsInput(BaseModel):
-    query: str
-    max_results: int = 10
+def _list_emails_sync(config: RunnableConfig, max_results: int) -> list[dict[str, Any]]:
+    """Synchronous wrapper for list_emails."""
+    service = _get_gmail_service(config)
+    return service.list_messages(max_results=max_results)
 
 
-class DraftReplyInput(BaseModel):
-    email_id: str
-    instructions: str
+def _get_email_sync(config: RunnableConfig, email_id: str, include_thread: bool) -> dict[str, Any]:
+    """Synchronous wrapper for get_email."""
+    service = _get_gmail_service(config)
+    return service.get_message(message_id=email_id, include_thread=include_thread)
 
 
-class SendEmailInput(BaseModel):
-    to: str
-    subject: str
-    body: str
-    reply_to_id: str | None = None
+def _search_emails_sync(config: RunnableConfig, query: str, max_results: int) -> list[dict[str, Any]]:
+    """Synchronous wrapper for search_emails."""
+    service = _get_gmail_service(config)
+    return service.search_messages(query=query, max_results=max_results)
 
 
-async def _list_emails(max_results: int = 10) -> str:
-    tool_input = {"max_results": max_results}
-    try:
-        service = get_gmail_service()
-        emails = service.list_messages(max_results=max_results)
-        result = _format_email_list(emails)
-        track_tool_call(name="list_emails", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        track_tool_call(
-            name="list_emails",
-            tool_input=tool_input,
-            tool_output=None,
-            error=str(exc),
-        )
-        raise
+def _send_email_sync(
+    config: RunnableConfig,
+    to: str,
+    subject: str,
+    body: str,
+    thread_id: str | None,
+    in_reply_to: str | None,
+    references: str | None,
+) -> dict[str, Any]:
+    """Synchronous wrapper for send_email."""
+    service = _get_gmail_service(config)
+    return service.send_message(
+        to=to,
+        subject=subject,
+        body=body,
+        thread_id=thread_id,
+        in_reply_to=in_reply_to,
+        references=references,
+    )
 
 
-async def _get_email(email_id: str) -> str:
-    tool_input = {"email_id": email_id}
-    try:
-        service = get_gmail_service()
-        email_data = service.get_message(message_id=email_id, include_thread=True)
-        result = _format_full_email(email_data)
-        track_tool_call(name="get_email", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        track_tool_call(
-            name="get_email",
-            tool_input=tool_input,
-            tool_output=None,
-            error=str(exc),
-        )
-        raise
+@tool
+async def list_emails(max_results: int = 10, *, config: RunnableConfig) -> str:
+    """List recent emails from the user's Gmail inbox."""
+    emails = await asyncio.to_thread(_list_emails_sync, config, max_results)
+    return _format_email_list(emails)
 
 
-async def _search_emails(query: str, max_results: int = 10) -> str:
-    tool_input = {"query": query, "max_results": max_results}
-    try:
-        service = get_gmail_service()
-        emails = service.search_messages(query=query, max_results=max_results)
-        result = _format_email_list(emails)
-        track_tool_call(name="search_emails", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        track_tool_call(
-            name="search_emails",
-            tool_input=tool_input,
-            tool_output=None,
-            error=str(exc),
-        )
-        raise
+@tool
+async def get_email(email_id: str, *, config: RunnableConfig) -> str:
+    """Get the full content of a specific email by ID, including the conversation thread."""
+    email_data = await asyncio.to_thread(_get_email_sync, config, email_id, True)
+    return _format_full_email(email_data)
 
 
-async def _draft_reply(email_id: str, instructions: str) -> str:
-    tool_input = {"email_id": email_id, "instructions": instructions}
-    try:
-        service = get_gmail_service()
-        email_data = service.get_message(message_id=email_id, include_thread=False)
-        message = email_data["message"]
-        draft = _build_draft_reply(message, instructions)
-        track_tool_call(name="draft_reply", tool_input=tool_input, tool_output=draft)
-        return draft
-    except Exception as exc:
-        track_tool_call(
-            name="draft_reply",
-            tool_input=tool_input,
-            tool_output=None,
-            error=str(exc),
-        )
-        raise
+@tool
+async def search_emails(query: str, max_results: int = 10, *, config: RunnableConfig) -> str:
+    """Search emails by query (sender, subject, content). Uses Gmail search syntax."""
+    emails = await asyncio.to_thread(_search_emails_sync, config, query, max_results)
+    return _format_email_list(emails)
 
 
-async def _send_email(
+@tool
+async def draft_reply(email_id: str, instructions: str, *, config: RunnableConfig) -> str:
+    """Generate a reply draft for an email based on user instructions."""
+    email_data = await asyncio.to_thread(_get_email_sync, config, email_id, False)
+    message = email_data["message"]
+    return _build_draft_reply(message, instructions)
+
+
+@tool
+async def send_email(
     to: str,
     subject: str,
     body: str,
     reply_to_id: str | None = None,
+    *,
+    config: RunnableConfig,
 ) -> str:
-    tool_input = {
-        "to": to,
-        "subject": subject,
-        "body": body,
-        "reply_to_id": reply_to_id,
-    }
-    try:
-        service = get_gmail_service()
-        thread_id = None
-        in_reply_to = None
-        references = None
-        if reply_to_id:
-            email_data = service.get_message(message_id=reply_to_id, include_thread=False)
-            message = email_data["message"]
-            thread_id = message.get("thread_id") or None
-            in_reply_to = message.get("message_id") or None
-            references = in_reply_to
-            if not subject:
-                subject = _reply_subject(message.get("subject", ""))
+    """Send an email or reply. If reply_to_id is provided, sends as a reply to that email thread."""
+    thread_id = None
+    in_reply_to = None
+    references = None
+    final_subject = subject
 
-        response = service.send_message(
-            to=to,
-            subject=subject,
-            body=body,
-            thread_id=thread_id,
-            in_reply_to=in_reply_to,
-            references=references,
-        )
-        result = f"Email sent. ID: {response.get('id', '')}"
-        track_tool_call(name="send_email", tool_input=tool_input, tool_output=result)
-        return result
-    except Exception as exc:
-        track_tool_call(
-            name="send_email",
-            tool_input=tool_input,
-            tool_output=None,
-            error=str(exc),
-        )
-        raise
+    if reply_to_id:
+        email_data = await asyncio.to_thread(_get_email_sync, config, reply_to_id, False)
+        message = email_data["message"]
+        thread_id = message.get("thread_id") or None
+        in_reply_to = message.get("message_id") or None
+        references = in_reply_to
+        if not final_subject:
+            final_subject = _reply_subject(message.get("subject", ""))
+
+    response = await asyncio.to_thread(
+        _send_email_sync,
+        config,
+        to,
+        final_subject,
+        body,
+        thread_id,
+        in_reply_to,
+        references,
+    )
+    return f"Email sent. ID: {response.get('id', '')}"
 
 
 def _format_email_list(emails: list[dict[str, Any]]) -> str:
@@ -234,39 +203,3 @@ def _reply_subject(subject: str) -> str:
     if subject.lower().startswith("re:"):
         return subject
     return f"Re: {subject}".strip()
-
-
-list_emails = StructuredTool(
-    name="list_emails",
-    description="List recent emails from the user's Gmail inbox",
-    args_schema=ListEmailsInput,
-    coroutine=_list_emails,
-)
-
-get_email = StructuredTool(
-    name="get_email",
-    description="Get the full content of a specific email by ID, including the conversation thread",
-    args_schema=GetEmailInput,
-    coroutine=_get_email,
-)
-
-search_emails = StructuredTool(
-    name="search_emails",
-    description="Search emails by query (sender, subject, content). Uses Gmail search syntax.",
-    args_schema=SearchEmailsInput,
-    coroutine=_search_emails,
-)
-
-draft_reply = StructuredTool(
-    name="draft_reply",
-    description="Generate a reply draft for an email based on user instructions",
-    args_schema=DraftReplyInput,
-    coroutine=_draft_reply,
-)
-
-send_email = StructuredTool(
-    name="send_email",
-    description="Send an email or reply. If reply_to_id is provided, sends as a reply to that email thread.",
-    args_schema=SendEmailInput,
-    coroutine=_send_email,
-)

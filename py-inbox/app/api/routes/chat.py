@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
 
 from app.core.config import settings
+from app.core.google_oauth import get_valid_access_token
 
 logger = logging.getLogger(__name__)
 
@@ -17,13 +18,29 @@ SESSION_KEY_TOKENS = "google_tokens"
 SESSION_KEY_USER = "user"
 
 
-def _get_credentials_from_session(session: dict[str, Any]) -> dict[str, Any]:
-    """Extract Google credentials from session for agent config."""
+def _get_credentials_from_session(session: dict[str, Any], request: Request | None = None) -> dict[str, Any]:
+    """Extract Google credentials from session for agent config, refreshing if expired."""
     tokens = session.get(SESSION_KEY_TOKENS, {})
     user = session.get(SESSION_KEY_USER, {})
 
+    if not tokens:
+        return {"access_token": None, "refresh_token": None, "user": user}
+
+    # Check if token needs refresh and refresh if needed
+    access_token, updated_tokens = get_valid_access_token(tokens)
+
+    if updated_tokens:
+        # Token was refreshed - update session with new tokens
+        logger.info("[chat] Access token refreshed successfully")
+        if request is not None:
+            request.session[SESSION_KEY_TOKENS] = updated_tokens
+            tokens = updated_tokens
+        access_token = updated_tokens.get("access_token")
+    elif access_token is None:
+        logger.warning("[chat] Failed to get valid access token - may need to re-authenticate")
+
     return {
-        "access_token": tokens.get("access_token"),
+        "access_token": access_token,
         "refresh_token": tokens.get("refresh_token"),
         "user": user,
     }
@@ -45,7 +62,14 @@ async def stream_chat(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    credentials = _get_credentials_from_session(dict(request.session))
+    credentials = _get_credentials_from_session(dict(request.session), request)
+
+    if not credentials.get("access_token"):
+        logger.warning("[chat] No valid access token - user must re-authenticate")
+        raise HTTPException(
+            status_code=401,
+            detail="Google authentication expired. Please log in again.",
+        )
 
     langgraph_payload = {
         "input": {"messages": messages},
@@ -91,7 +115,14 @@ async def invoke_chat(request: Request):
     if not messages:
         raise HTTPException(status_code=400, detail="No messages provided")
 
-    credentials = _get_credentials_from_session(dict(request.session))
+    credentials = _get_credentials_from_session(dict(request.session), request)
+
+    if not credentials.get("access_token"):
+        logger.warning("[chat] No valid access token - user must re-authenticate")
+        raise HTTPException(
+            status_code=401,
+            detail="Google authentication expired. Please log in again.",
+        )
 
     langgraph_payload = {
         "input": {"messages": messages},

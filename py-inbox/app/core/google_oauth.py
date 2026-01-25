@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from google.oauth2.credentials import Credentials
@@ -156,6 +156,26 @@ def refresh_credentials(credentials: Credentials) -> dict[str, Any] | None:
         return None
 
 
+def _is_token_expired(token_data: dict[str, Any]) -> bool:
+    """Check if token is expired, handling timezone issues safely."""
+    expiry_str = token_data.get("expiry")
+    if not expiry_str:
+        # No expiry info - assume not expired, let the API call fail if it is
+        return False
+
+    try:
+        expiry = datetime.fromisoformat(expiry_str)
+        # Ensure both datetimes are timezone-aware for comparison
+        if expiry.tzinfo is None:
+            expiry = expiry.replace(tzinfo=timezone.utc)
+        now = datetime.now(timezone.utc)
+        # Add a small buffer (5 minutes) to refresh before actual expiry
+        return now >= expiry - timedelta(minutes=5)
+    except (ValueError, TypeError) as e:
+        logger.warning(f"Failed to parse token expiry: {e}")
+        return False
+
+
 def get_valid_access_token(token_data: dict[str, Any]) -> tuple[str | None, dict[str, Any] | None]:
     """
     Get a valid access token, refreshing if needed.
@@ -165,17 +185,27 @@ def get_valid_access_token(token_data: dict[str, Any]) -> tuple[str | None, dict
         - access_token: Valid access token or None
         - updated_token_data: New token data if refreshed, None otherwise
     """
-    credentials = get_credentials_from_tokens(token_data)
-    if not credentials:
+    if not token_data or not token_data.get("access_token"):
+        logger.debug("[oauth] No token data or access token")
         return None, None
 
-    if credentials.expired and credentials.refresh_token:
-        updated = refresh_credentials(credentials)
-        if updated:
-            return updated["access_token"], updated
-        return None, None
+    # Check if token is expired
+    if _is_token_expired(token_data):
+        logger.info("[oauth] Token expired, attempting refresh")
+        if token_data.get("refresh_token"):
+            credentials = get_credentials_from_tokens(token_data)
+            if credentials:
+                updated = refresh_credentials(credentials)
+                if updated:
+                    logger.info("[oauth] Token refreshed successfully")
+                    return updated["access_token"], updated
+            logger.warning("[oauth] Token refresh failed")
+            return None, None
+        else:
+            logger.warning("[oauth] Token expired and no refresh token - user must re-authenticate")
+            return None, None
 
-    return credentials.token, None
+    return token_data.get("access_token"), None
 
 
 async def get_user_info(access_token: str) -> dict[str, Any] | None:

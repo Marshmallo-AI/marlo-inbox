@@ -1,21 +1,10 @@
 from __future__ import annotations
 
 import logging
-from contextvars import ContextVar
+
+from langchain_core.runnables import RunnableConfig
 
 logger = logging.getLogger(__name__)
-
-_google_access_token: ContextVar[str | None] = ContextVar("google_access_token", default=None)
-
-
-def set_google_access_token(token: str | None) -> None:
-    """Set the Google access token for the current context."""
-    _google_access_token.set(token)
-
-
-def get_google_access_token() -> str | None:
-    """Get the Google access token from the current context."""
-    return _google_access_token.get()
 
 
 class GoogleAuthError(Exception):
@@ -26,23 +15,19 @@ class GoogleAuthError(Exception):
         super().__init__(message)
 
 
-def get_gmail_service():
-    """Get Gmail service with current access token."""
-    from app.services.gmail import GmailService
+def get_access_token_from_config(config: RunnableConfig | None) -> str | None:
+    """Extract Google access token from RunnableConfig."""
+    if not config:
+        logger.warning("[google_tools] No config provided")
+        return None
 
-    access_token = get_google_access_token()
-    if not access_token:
-        raise GoogleAuthError("Not authenticated. Please log in first.")
+    configurable = config.get("configurable", {})
+    credentials = configurable.get("_credentials", {})
+    access_token = credentials.get("access_token") if isinstance(credentials, dict) else None
 
-    return GmailService(access_token)
+    if access_token:
+        logger.debug(f"[google_tools] Access token found (length: {len(access_token)})")
+    else:
+        logger.warning("[google_tools] No access token in config")
 
-
-def get_calendar_service():
-    """Get Calendar service with current access token."""
-    from app.services.calendar import CalendarService
-
-    access_token = get_google_access_token()
-    if not access_token:
-        raise GoogleAuthError("Not authenticated. Please log in first.")
-
-    return CalendarService(access_token)
+    return access_token

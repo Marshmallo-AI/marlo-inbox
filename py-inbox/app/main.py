@@ -25,7 +25,7 @@ async def lifespan(app: FastAPI):
         try:
             import marlo
 
-            marlo.init(api_key=settings.MARLO_API_KEY)
+            await marlo.init_async(api_key=settings.MARLO_API_KEY)
             logger.info("Marlo SDK initialized")
         except Exception as e:
             logger.warning(f"Failed to initialize Marlo: {e}")
