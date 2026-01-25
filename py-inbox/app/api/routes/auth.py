@@ -4,7 +4,7 @@ import logging
 from urllib.parse import urlencode
 
 from fastapi import APIRouter, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 from app.core.config import settings
 from app.core.google_oauth import (
@@ -18,6 +18,29 @@ from app.core.google_oauth import (
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+
+def _popup_close_response(success: bool = True, error: str | None = None) -> HTMLResponse:
+    """Return HTML that closes popup and signals parent window."""
+    message = "success" if success else f"error:{error or 'unknown'}"
+    html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head><title>Authentication</title></head>
+    <body>
+    <script>
+        if (window.opener) {{
+            window.opener.postMessage({{ type: 'google-auth', status: '{message}' }}, '*');
+            window.close();
+        }} else {{
+            window.location.href = '{settings.APP_BASE_URL}';
+        }}
+    </script>
+    <p>Authentication complete. This window should close automatically.</p>
+    </body>
+    </html>
+    """
+    return HTMLResponse(content=html)
 
 
 @router.get("/login")
@@ -41,13 +64,27 @@ async def callback(request: Request):
     code = request.query_params.get("code")
     state = request.query_params.get("state")
     error = request.query_params.get("error")
+    is_popup = request.query_params.get("popup") == "true" or (state and state.startswith("popup:"))
+
+    # Extract actual return_to from popup state
+    return_to = "/"
+    if state:
+        if state.startswith("popup:"):
+            return_to = state[6:] or "/"
+            is_popup = True
+        elif state.startswith("/"):
+            return_to = state
 
     if error:
         logger.error(f"OAuth error: {error}")
+        if is_popup:
+            return _popup_close_response(success=False, error=error)
         return RedirectResponse(url=f"{settings.APP_BASE_URL}?error={error}")
 
     if not code:
         logger.error("No authorization code received")
+        if is_popup:
+            return _popup_close_response(success=False, error="no_code")
         return RedirectResponse(url=f"{settings.APP_BASE_URL}?error=no_code")
 
     try:
@@ -64,11 +101,15 @@ async def callback(request: Request):
                 "picture": user_info.get("picture"),
             }
 
-        return_to = state if state and state.startswith("/") else "/"
+        if is_popup:
+            return _popup_close_response(success=True)
+
         return RedirectResponse(url=f"{settings.APP_BASE_URL}{return_to}")
 
     except Exception as e:
         logger.exception(f"OAuth callback error: {e}")
+        if is_popup:
+            return _popup_close_response(success=False, error=str(e))
         error_params = urlencode({"error": "auth_failed", "message": str(e)})
         return RedirectResponse(url=f"{settings.APP_BASE_URL}?{error_params}")
 

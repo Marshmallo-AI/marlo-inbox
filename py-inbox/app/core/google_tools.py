@@ -2,10 +2,6 @@ from __future__ import annotations
 
 import logging
 from contextvars import ContextVar
-from functools import wraps
-from typing import Any, Callable
-
-from langgraph.types import interrupt
 
 logger = logging.getLogger(__name__)
 
@@ -22,38 +18,12 @@ def get_google_access_token() -> str | None:
     return _google_access_token.get()
 
 
-class GoogleAuthInterrupt(Exception):
-    """Exception raised when Google authentication is required."""
+class GoogleAuthError(Exception):
+    """Exception raised when Google authentication is missing or invalid."""
 
     def __init__(self, message: str = "Google authentication required"):
         self.message = message
         super().__init__(message)
-
-
-def require_google_auth(tool_func: Callable) -> Callable:
-    """
-    Decorator for tools that require Google authentication.
-
-    If no access token is available, triggers a LangGraph interrupt
-    to request authentication from the user.
-    """
-
-    @wraps(tool_func)
-    async def wrapper(*args: Any, **kwargs: Any) -> Any:
-        access_token = get_google_access_token()
-        logger.info(f"[require_google_auth] Tool {tool_func.__name__} - access_token exists: {bool(access_token)}")
-
-        if not access_token:
-            logger.info("No Google access token available, triggering interrupt")
-            return interrupt({
-                "type": "google_auth_required",
-                "message": "Please connect your Google account to access Gmail and Calendar.",
-                "action": "authorize",
-            })
-
-        return await tool_func(*args, **kwargs)
-
-    return wrapper
 
 
 def get_gmail_service():
@@ -62,7 +32,7 @@ def get_gmail_service():
 
     access_token = get_google_access_token()
     if not access_token:
-        raise GoogleAuthInterrupt("Google authentication required for Gmail access")
+        raise GoogleAuthError("Not authenticated. Please log in first.")
 
     return GmailService(access_token)
 
@@ -73,6 +43,6 @@ def get_calendar_service():
 
     access_token = get_google_access_token()
     if not access_token:
-        raise GoogleAuthInterrupt("Google authentication required for Calendar access")
+        raise GoogleAuthError("Not authenticated. Please log in first.")
 
     return CalendarService(access_token)

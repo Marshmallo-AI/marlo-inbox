@@ -8,7 +8,6 @@ import { useStream } from "@langchain/langgraph-sdk/react"
 import { type Message } from "@langchain/langgraph-sdk"
 
 import { ChatMessageBubble } from "@/components/chat-message-bubble"
-import { GoogleAuthHandler } from "@/components/GoogleAuthHandler"
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
@@ -183,21 +182,11 @@ export function ChatWindow(props: {
           chat.messages.length === 0 ? (
             <div>{props.emptyStateComponent}</div>
           ) : (
-            <>
-              <ChatMessages
-                aiEmoji={props.emoji}
-                messages={chat.messages}
-                emptyStateComponent={props.emptyStateComponent}
-              />
-              <div className="flex flex-col max-w-[768px] mx-auto pb-12 w-full">
-                {!!chat.interrupt?.value && (
-                  <GoogleAuthHandler
-                    interrupt={chat.interrupt}
-                    onFinish={() => chat.submit(null)}
-                  />
-                )}
-              </div>
-            </>
+            <ChatMessages
+              aiEmoji={props.emoji}
+              messages={chat.messages}
+              emptyStateComponent={props.emptyStateComponent}
+            />
           )
         }
         footer={

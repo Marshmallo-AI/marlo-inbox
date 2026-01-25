@@ -8,7 +8,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from app.agents.tools import track_tool_call
-from app.core.google_tools import get_calendar_service, require_google_auth
+from app.core.google_tools import get_calendar_service
 
 logger = logging.getLogger(__name__)
 
@@ -94,7 +94,6 @@ def _format_event(event: dict[str, Any]) -> str:
     return " - ".join(parts)
 
 
-@require_google_auth
 async def _get_schedule(date: str, days: int = 1) -> str:
     tool_input = {"date": date, "days": days}
     try:
@@ -112,15 +111,14 @@ async def _get_schedule(date: str, days: int = 1) -> str:
             header = f"Schedule from {start_date} for {span} day(s):"
             formatted = "\n".join(_format_event(event) for event in events)
             result = f"{header}\n{formatted}"
-        track_tool_call("get_schedule", tool_input, result)
+        track_tool_call(name="get_schedule", tool_input=tool_input, tool_output=result)
         return result
     except Exception as exc:
         error = str(exc)
-        track_tool_call("get_schedule", tool_input, None, error=error)
+        track_tool_call(name="get_schedule", tool_input=tool_input, tool_output=None, error=error)
         raise
 
 
-@require_google_auth
 async def _check_availability(start_time: str, end_time: str) -> str:
     tool_input = {"start_time": start_time, "end_time": end_time}
     try:
@@ -137,15 +135,14 @@ async def _check_availability(start_time: str, end_time: str) -> str:
                 for item in busy_times
             )
             result = f"Not available. Conflicts: {conflicts}."
-        track_tool_call("check_availability", tool_input, result)
+        track_tool_call(name="check_availability", tool_input=tool_input, tool_output=result)
         return result
     except Exception as exc:
         error = str(exc)
-        track_tool_call("check_availability", tool_input, None, error=error)
+        track_tool_call(name="check_availability", tool_input=tool_input, tool_output=None, error=error)
         raise
 
 
-@require_google_auth
 async def _find_free_slots(date: str, duration_minutes: int = 30) -> str:
     tool_input = {"date": date, "duration_minutes": duration_minutes}
     try:
@@ -189,15 +186,14 @@ async def _find_free_slots(date: str, duration_minutes: int = 30) -> str:
             result = (
                 f"Free slots on {date} for {duration_minutes} minutes:\n{slots}"
             )
-        track_tool_call("find_free_slots", tool_input, result)
+        track_tool_call(name="find_free_slots", tool_input=tool_input, tool_output=result)
         return result
     except Exception as exc:
         error = str(exc)
-        track_tool_call("find_free_slots", tool_input, None, error=error)
+        track_tool_call(name="find_free_slots", tool_input=tool_input, tool_output=None, error=error)
         raise
 
 
-@require_google_auth
 async def _create_event(
     title: str,
     start_time: str,
@@ -241,11 +237,11 @@ async def _create_event(
             result = f"{result} with attendees: {', '.join(attendees)}"
         if event_id:
             result = f"{result}. Event ID: {event_id}."
-        track_tool_call("create_event", tool_input, result)
+        track_tool_call(name="create_event", tool_input=tool_input, tool_output=result)
         return result
     except Exception as exc:
         error = str(exc)
-        track_tool_call("create_event", tool_input, None, error=error)
+        track_tool_call(name="create_event", tool_input=tool_input, tool_output=None, error=error)
         raise
 
 
@@ -255,18 +251,17 @@ def _build_event_time(value: str) -> dict[str, str]:
     return {"dateTime": _ensure_rfc3339(value)}
 
 
-@require_google_auth
 async def _delete_event(event_id: str) -> str:
     tool_input = {"event_id": event_id}
     try:
         service = get_calendar_service()
         service.delete_event(event_id=event_id)
         result = f"Deleted event {event_id}."
-        track_tool_call("delete_event", tool_input, result)
+        track_tool_call(name="delete_event", tool_input=tool_input, tool_output=result)
         return result
     except Exception as exc:
         error = str(exc)
-        track_tool_call("delete_event", tool_input, None, error=error)
+        track_tool_call(name="delete_event", tool_input=tool_input, tool_output=None, error=error)
         raise
 
 

@@ -11,7 +11,7 @@ from langchain_core.tools import StructuredTool
 from pydantic import BaseModel
 
 from app.agents.tools import track_tool_call
-from app.core.google_tools import get_gmail_service, require_google_auth
+from app.core.google_tools import get_gmail_service
 
 
 class ListEmailsInput(BaseModel):
@@ -39,7 +39,6 @@ class SendEmailInput(BaseModel):
     reply_to_id: str | None = None
 
 
-@require_google_auth
 async def _list_emails(max_results: int = 10) -> str:
     tool_input = {"max_results": max_results}
     try:
@@ -58,7 +57,6 @@ async def _list_emails(max_results: int = 10) -> str:
         raise
 
 
-@require_google_auth
 async def _get_email(email_id: str) -> str:
     tool_input = {"email_id": email_id}
     try:
@@ -77,7 +75,6 @@ async def _get_email(email_id: str) -> str:
         raise
 
 
-@require_google_auth
 async def _search_emails(query: str, max_results: int = 10) -> str:
     tool_input = {"query": query, "max_results": max_results}
     try:
@@ -96,7 +93,6 @@ async def _search_emails(query: str, max_results: int = 10) -> str:
         raise
 
 
-@require_google_auth
 async def _draft_reply(email_id: str, instructions: str) -> str:
     tool_input = {"email_id": email_id, "instructions": instructions}
     try:
@@ -116,7 +112,6 @@ async def _draft_reply(email_id: str, instructions: str) -> str:
         raise
 
 
-@require_google_auth
 async def _send_email(
     to: str,
     subject: str,

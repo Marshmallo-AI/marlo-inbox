@@ -55,9 +55,15 @@ async def proxy_to_langgraph(request: Request, path: str):
     headers.pop("content-length", None)
 
     credentials = {}
-    if SESSION_KEY_USER in request.session:
-        credentials = _get_credentials_from_session(dict(request.session))
-        logger.debug(f"Injecting credentials for user: {credentials.get('user', {}).get('email', 'unknown')}")
+    session_dict = dict(request.session)
+    logger.info(f"[agent proxy] Session keys: {list(session_dict.keys())}")
+
+    if SESSION_KEY_USER in session_dict:
+        credentials = _get_credentials_from_session(session_dict)
+        has_token = bool(credentials.get("access_token"))
+        logger.info(f"[agent proxy] User: {credentials.get('user', {}).get('email', 'unknown')}, has_token: {has_token}")
+    else:
+        logger.warning("[agent proxy] No user in session - credentials will be empty")
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as client:

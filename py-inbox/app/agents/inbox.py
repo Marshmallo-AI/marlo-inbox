@@ -46,41 +46,95 @@ def get_current_task() -> Any:
 class MarloLLMCallback(BaseCallbackHandler):
     """Callback handler to capture LLM calls for Marlo."""
 
+    def on_llm_start(self, serialized: dict, prompts: list, **kwargs: Any) -> None:
+        logger.info(f"[marlo-callback] on_llm_start called - prompts count: {len(prompts)}")
+
     def on_llm_end(self, response: LLMResult, **kwargs: Any) -> None:
+        logger.info("[marlo-callback] on_llm_end called")
+
         task_context = get_current_task()
         if not task_context:
+            logger.warning("[marlo-callback] No task context available, skipping LLM tracking")
             return
 
         try:
+            # Log response structure
+            logger.info(f"[marlo-callback] response type: {type(response)}")
+            logger.info(f"[marlo-callback] response.generations count: {len(response.generations) if response.generations else 0}")
+
+            # Also check llm_output for token usage (some providers put it here)
+            llm_output = getattr(response, "llm_output", None)
+            logger.info(f"[marlo-callback] response.llm_output: {llm_output}")
+
             generation = response.generations[0][0] if response.generations else None
             if not generation:
+                logger.warning("[marlo-callback] No generation found in response")
                 return
 
-            response_content = generation.text or ""
-            llm_output = response.llm_output or {}
-            token_usage = llm_output.get("token_usage", {})
+            logger.info(f"[marlo-callback] generation type: {type(generation)}")
+            logger.info(f"[marlo-callback] generation attributes: {dir(generation)}")
 
-            # Extract reasoning if available (for extended thinking models)
+            response_content = generation.text or ""
+            logger.info(f"[marlo-callback] response_content length: {len(response_content)}")
+
+            # Extract token usage from message.usage_metadata (LangChain standard)
+            input_tokens = 0
+            output_tokens = 0
+            reasoning_tokens = 0
+
             message = getattr(generation, "message", None)
+            logger.info(f"[marlo-callback] message type: {type(message) if message else None}")
+
             if message:
+                logger.info(f"[marlo-callback] message attributes: {dir(message)}")
+
+                usage_metadata = getattr(message, "usage_metadata", None)
+                logger.info(f"[marlo-callback] usage_metadata: {usage_metadata}")
+
+                # Also check response_metadata
+                response_metadata = getattr(message, "response_metadata", None)
+                logger.info(f"[marlo-callback] response_metadata: {response_metadata}")
+
+                if usage_metadata:
+                    input_tokens = usage_metadata.get("input_tokens", 0)
+                    output_tokens = usage_metadata.get("output_tokens", 0)
+                    # Reasoning tokens in output_token_details for OpenAI
+                    output_details = usage_metadata.get("output_token_details", {})
+                    if output_details:
+                        reasoning_tokens = output_details.get("reasoning", 0)
+                    logger.info(f"[marlo-callback] Extracted from usage_metadata - input: {input_tokens}, output: {output_tokens}, reasoning: {reasoning_tokens}")
+
+                # Fallback: check response_metadata.token_usage
+                if input_tokens == 0 and output_tokens == 0 and response_metadata:
+                    token_usage = response_metadata.get("token_usage", {})
+                    if token_usage:
+                        input_tokens = token_usage.get("prompt_tokens", 0)
+                        output_tokens = token_usage.get("completion_tokens", 0)
+                        reasoning_tokens = token_usage.get("reasoning_tokens", 0)
+                        logger.info(f"[marlo-callback] Extracted from response_metadata.token_usage - input: {input_tokens}, output: {output_tokens}, reasoning: {reasoning_tokens}")
+
+                # Extract reasoning if available (for extended thinking models)
                 additional_kwargs = getattr(message, "additional_kwargs", {})
                 reasoning = additional_kwargs.get("reasoning")
                 if reasoning:
                     task_context.reasoning(reasoning)
 
+            logger.info(f"[marlo-callback] Final token counts - input: {input_tokens}, output: {output_tokens}, reasoning: {reasoning_tokens}")
+
             # Track LLM call with token usage
             task_context.llm(
                 model=MODEL_NAME,
                 usage={
-                    "input_tokens": token_usage.get("prompt_tokens", 0),
-                    "output_tokens": token_usage.get("completion_tokens", 0),
-                    "reasoning_tokens": token_usage.get("reasoning_tokens", 0),
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "reasoning_tokens": reasoning_tokens,
                 },
                 messages=[],
                 response=response_content,
             )
+            logger.info("[marlo-callback] Successfully tracked LLM call with Marlo")
         except Exception as e:
-            logger.warning(f"[marlo] Failed to track LLM call: {e}")
+            logger.exception(f"[marlo-callback] Failed to track LLM call: {e}")
 
 
 marlo_callback = MarloLLMCallback()
@@ -89,6 +143,7 @@ llm = ChatOpenAI(
     model=MODEL_NAME,
     api_key=settings.OPENAI_API_KEY,
     temperature=1,
+    stream_usage=True,
     callbacks=[marlo_callback],
 )
 
