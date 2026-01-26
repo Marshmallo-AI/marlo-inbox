@@ -11,15 +11,15 @@ export default function Layout() {
   const { user } = useAuth()
 
   return (
-    <div className="bg-background grid grid-rows-[auto_1fr] h-[100dvh]">
-      <header className="border-b border-border">
+    <div className="bg-white grid grid-rows-[auto_1fr] h-[100dvh]">
+      <header className="border-b border-gray-200 bg-white">
         <div className="flex items-center justify-between h-14 px-4 max-w-screen-xl mx-auto">
           <div className="flex items-center gap-4">
             <a href="/" className="flex items-center gap-2">
-              <div className="p-1.5 rounded-md bg-primary/10">
-                <Mail className="h-5 w-5 text-primary" />
+              <div className="p-1.5 rounded-md bg-gray-900">
+                <Mail className="h-5 w-5 text-white" />
               </div>
-              <span className="font-semibold text-foreground">Inbox Pilot</span>
+              <span className="font-semibold text-gray-900">Marlo Inbox</span>
             </a>
           </div>
 
@@ -27,7 +27,7 @@ export default function Layout() {
             {user && (
               <UserButton user={user} logoutUrl={getLogoutUrl()} />
             )}
-            <Button asChild variant="ghost" size="icon-sm">
+            <Button asChild variant="ghost" size="icon-sm" className="text-gray-600 hover:text-gray-900 hover:bg-gray-100">
               <a
                 href="https://github.com/marlo-ai/marlo-inbox"
                 target="_blank"
@@ -40,7 +40,7 @@ export default function Layout() {
         </div>
       </header>
 
-      <main className="relative overflow-hidden">
+      <main className="relative overflow-hidden bg-white">
         <div className="absolute inset-0">
           <Routes>
             <Route path="/" element={<ChatPage />} />

@@ -111,8 +111,10 @@ def get_credentials_from_tokens(token_data: dict[str, Any]) -> Credentials | Non
     if token_data.get("expiry"):
         try:
             expiry = datetime.fromisoformat(token_data["expiry"])
-            if expiry.tzinfo is None:
-                expiry = expiry.replace(tzinfo=timezone.utc)
+            # Google auth library uses naive datetimes internally (UTC assumed)
+            # Remove timezone info to avoid comparison errors
+            if expiry.tzinfo is not None:
+                expiry = expiry.replace(tzinfo=None)
         except (ValueError, TypeError):
             pass
 
