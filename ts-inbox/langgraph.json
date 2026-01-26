@@ -3,9 +3,6 @@
   "graphs": {
     "inbox": "./src/lib/agent.ts:agent"
   },
-  "auth": {
-    "path": "./src/lib/auth.ts:authHandler"
-  },
   "env": "../.env",
   "dependencies": ["."]
 }

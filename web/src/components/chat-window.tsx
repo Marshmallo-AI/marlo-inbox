@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, useEffect } from "react"
+import { useState } from "react"
 import type { FormEvent, ReactNode } from "react"
 import { toast } from "sonner"
 import { StickToBottom, useStickToBottomContext } from "use-stick-to-bottom"
@@ -126,26 +126,8 @@ export function ChatWindow(props: {
   placeholder?: string
   emoji?: string
 }) {
-  const [urlThreadId, setUrlThreadId] = useQueryState("threadId")
+  const [threadId, setThreadId] = useQueryState("threadId")
   const [input, setInput] = useState("")
-  const [stableThreadId, setStableThreadId] = useState<string | null>(urlThreadId)
-
-  const isStreamingRef = useRef(false)
-  const lastUrlUpdateRef = useRef<string | null>(null)
-  const pendingThreadIdRef = useRef<string | null>(null)
-
-  useEffect(() => {
-    if (isStreamingRef.current) return
-
-    if (lastUrlUpdateRef.current !== null && lastUrlUpdateRef.current === urlThreadId) {
-      return
-    }
-
-    if (urlThreadId !== stableThreadId) {
-      lastUrlUpdateRef.current = null
-      setStableThreadId(urlThreadId)
-    }
-  }, [urlThreadId, stableThreadId])
 
   const fetchWithCredentials = (url: string | URL | Request, options = {}) => {
     return fetch(url, {
@@ -154,44 +136,20 @@ export function ChatWindow(props: {
     })
   }
 
-  const handleThreadId = useCallback((newThreadId: string) => {
-    if (isStreamingRef.current) {
-      pendingThreadIdRef.current = newThreadId
-      setStableThreadId(newThreadId)
-    } else {
-      lastUrlUpdateRef.current = newThreadId
-      setUrlThreadId(newThreadId)
-    }
-  }, [setUrlThreadId])
-
   const chat = useStream({
     apiUrl: `${window.location.origin}${props.endpoint}`,
     assistantId: "inbox",
-    threadId: stableThreadId,
+    threadId,
     callerOptions: {
       fetch: fetchWithCredentials,
     },
-    onThreadId: handleThreadId,
+    onThreadId: setThreadId,
     onError: (error: unknown) => {
-      isStreamingRef.current = false
-      if (pendingThreadIdRef.current) {
-        lastUrlUpdateRef.current = pendingThreadIdRef.current
-        setUrlThreadId(pendingThreadIdRef.current)
-        pendingThreadIdRef.current = null
-      }
       console.error("Error: ", error)
       const message = error instanceof Error ? error.message : String(error)
       toast.error("Error while processing your request", {
         description: message,
       })
-    },
-    onFinish: () => {
-      isStreamingRef.current = false
-      if (pendingThreadIdRef.current) {
-        lastUrlUpdateRef.current = pendingThreadIdRef.current
-        setUrlThreadId(pendingThreadIdRef.current)
-        pendingThreadIdRef.current = null
-      }
     },
   })
 
@@ -202,8 +160,6 @@ export function ChatWindow(props: {
   async function sendMessage(e: FormEvent<HTMLFormElement>) {
     e.preventDefault()
     if (isChatLoading()) return
-
-    isStreamingRef.current = true
 
     chat.submit(
       { messages: [{ type: "human", content: input }] },

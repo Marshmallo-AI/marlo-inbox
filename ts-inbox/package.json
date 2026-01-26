@@ -9,16 +9,13 @@
     "start": "langgraph start"
   },
   "dependencies": {
-    "@auth0/ai": "^6.0.0",
-    "@auth0/ai-langchain": "^5.0.0",
     "@langchain/core": "^0.3.72",
     "@langchain/langgraph": "^0.4.6",
     "@langchain/langgraph-sdk": "^0.0.109",
     "@langchain/openai": "^0.6.1",
-    "@marshmallo/marlo": "^0.1.1",
     "date-fns": "^4.1.0",
+    "gaxios": "^6.0.0",
     "googleapis": "^161.0.0",
-    "jose": "^6.1.0",
     "zod": "^3.25.76"
   },
   "devDependencies": {

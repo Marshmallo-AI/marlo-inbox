@@ -2,7 +2,6 @@ import { Button } from "@/components/ui/button"
 import useAuth, { getLoginUrl } from "@/lib/use-auth"
 import { LogIn, Mail, Calendar } from "lucide-react"
 import { ChatWindow } from "@/components/chat-window"
-import { ThreadSidebar } from "@/components/thread-sidebar"
 
 function InfoCard() {
   return (
@@ -70,16 +69,13 @@ export default function ChatPage() {
   }
 
   return (
-    <div className="flex h-full">
-      <ThreadSidebar className="w-72 h-full shrink-0 hidden md:block" />
-      <div className="flex-1 min-w-0">
-        <ChatWindow
-          endpoint="/api/agent"
-          emoji="📬"
-          placeholder={`Hello ${user?.name?.split(" ")[0] || "there"}, how can I help you today?`}
-          emptyStateComponent={<InfoCard />}
-        />
-      </div>
+    <div className="h-full">
+      <ChatWindow
+        endpoint="/api/agent"
+        emoji="📬"
+        placeholder={`Hello ${user?.name?.split(" ")[0] || "there"}, how can I help you today?`}
+        emptyStateComponent={<InfoCard />}
+      />
     </div>
   )
 }
