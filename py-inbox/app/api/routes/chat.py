@@ -79,7 +79,7 @@ async def stream_chat(request: Request):
                 "thread_id": thread_id,
             }
         },
-        "stream_mode": ["messages", "updates"],
+        "stream_mode": ["updates"],
     }
 
     async def stream_response():

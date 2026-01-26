@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from "react"
+import { useState, useEffect, useCallback, useRef } from "react"
 import { useQueryState } from "nuqs"
 import { PlusCircle, MessageSquare, Loader2, Trash2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -25,11 +25,14 @@ export function ThreadSidebar({ className }: ThreadSidebarProps) {
   const [threads, setThreads] = useState<Thread[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const lastFetchTimeRef = useRef<number>(0)
+  const fetchDebounceMs = 2000
 
   const fetchThreads = useCallback(async () => {
     try {
       setIsLoading(true)
       setError(null)
+      lastFetchTimeRef.current = Date.now()
       const response = await fetch("/api/agent/threads/search", {
         method: "POST",
         credentials: "include",
@@ -59,6 +62,11 @@ export function ThreadSidebar({ className }: ThreadSidebarProps) {
 
   useEffect(() => {
     if (urlThreadId && !threads.find(t => t.thread_id === urlThreadId)) {
+      const now = Date.now()
+      if (now - lastFetchTimeRef.current < fetchDebounceMs) {
+        return
+      }
+      lastFetchTimeRef.current = now
       fetchThreads()
     }
   }, [urlThreadId, threads, fetchThreads])

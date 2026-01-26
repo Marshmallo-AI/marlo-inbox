@@ -132,6 +132,7 @@ export function ChatWindow(props: {
 
   const isStreamingRef = useRef(false)
   const lastUrlUpdateRef = useRef<string | null>(null)
+  const pendingThreadIdRef = useRef<string | null>(null)
 
   useEffect(() => {
     if (isStreamingRef.current) return
@@ -154,8 +155,13 @@ export function ChatWindow(props: {
   }
 
   const handleThreadId = useCallback((newThreadId: string) => {
-    lastUrlUpdateRef.current = newThreadId
-    setUrlThreadId(newThreadId)
+    if (isStreamingRef.current) {
+      pendingThreadIdRef.current = newThreadId
+      setStableThreadId(newThreadId)
+    } else {
+      lastUrlUpdateRef.current = newThreadId
+      setUrlThreadId(newThreadId)
+    }
   }, [setUrlThreadId])
 
   const chat = useStream({
@@ -168,6 +174,11 @@ export function ChatWindow(props: {
     onThreadId: handleThreadId,
     onError: (error: unknown) => {
       isStreamingRef.current = false
+      if (pendingThreadIdRef.current) {
+        lastUrlUpdateRef.current = pendingThreadIdRef.current
+        setUrlThreadId(pendingThreadIdRef.current)
+        pendingThreadIdRef.current = null
+      }
       console.error("Error: ", error)
       const message = error instanceof Error ? error.message : String(error)
       toast.error("Error while processing your request", {
@@ -176,6 +187,11 @@ export function ChatWindow(props: {
     },
     onFinish: () => {
       isStreamingRef.current = false
+      if (pendingThreadIdRef.current) {
+        lastUrlUpdateRef.current = pendingThreadIdRef.current
+        setUrlThreadId(pendingThreadIdRef.current)
+        pendingThreadIdRef.current = null
+      }
     },
   })
 
