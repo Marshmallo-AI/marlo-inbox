@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
 import httpx
+import marlo
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -13,6 +15,9 @@ from app.core.google_oauth import get_valid_access_token
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/agent", tags=["agent"])
+
+AGENT_NAME = "inbox-pilot"
+MODEL_NAME = "gpt-5"
 
 SESSION_KEY_TOKENS = "google_tokens"
 SESSION_KEY_USER = "user"

@@ -24,7 +24,7 @@ dependencies = [
     "itsdangerous",
 
     # Marlo
-    "marlo-sdk==0.0.3",
+    "marlo-sdk",
 
     # Utils
     "python-dotenv",
