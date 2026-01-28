@@ -13,6 +13,7 @@ from functools import wraps
 from typing import Any
 
 import marlo
+from langchain_core.messages import AIMessage, ToolMessage
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
@@ -156,6 +157,81 @@ def get_current_task() -> Any:
     return _marlo_task_context
 
 
+def _track_tool_calls(task: Any, messages: list, tracked_tool_ids: set) -> None:
+    """Extract and track tool calls from messages."""
+    if not task:
+        logger.debug("[inbox] _track_tool_calls: No task context, skipping")
+        return
+    if not messages:
+        logger.debug("[inbox] _track_tool_calls: No messages, skipping")
+        return
+
+    logger.debug("[inbox] _track_tool_calls: Processing %d messages", len(messages))
+
+    # Build a map of tool_call_id -> tool call info from AIMessages
+    tool_calls_map: dict[str, dict] = {}
+    for i, msg in enumerate(messages):
+        msg_type = type(msg).__name__
+        logger.debug("[inbox] Message %d: type=%s", i, msg_type)
+
+        if isinstance(msg, AIMessage):
+            tool_calls = getattr(msg, "tool_calls", None)
+            logger.debug("[inbox] AIMessage has tool_calls: %s", tool_calls is not None and len(tool_calls) > 0 if tool_calls else False)
+            if tool_calls:
+                for tc in tool_calls:
+                    tool_id = tc.get("id")
+                    tool_name = tc.get("name", "unknown")
+                    logger.debug("[inbox] Found tool_call: id=%s, name=%s", tool_id, tool_name)
+                    if tool_id and tool_id not in tracked_tool_ids:
+                        tool_calls_map[tool_id] = {
+                            "name": tool_name,
+                            "input": tc.get("args", {}),
+                        }
+
+    logger.debug("[inbox] Tool calls map has %d entries", len(tool_calls_map))
+
+    # Match ToolMessages to their tool calls and track
+    tool_messages_found = 0
+    for msg in messages:
+        if isinstance(msg, ToolMessage):
+            tool_messages_found += 1
+            tool_id = getattr(msg, "tool_call_id", None)
+            tool_name_attr = getattr(msg, "name", None)
+            logger.debug("[inbox] ToolMessage: tool_call_id=%s, name=%s, already_tracked=%s",
+                        tool_id, tool_name_attr, tool_id in tracked_tool_ids if tool_id else "N/A")
+
+            if tool_id and tool_id not in tracked_tool_ids:
+                tool_info = tool_calls_map.get(tool_id, {})
+                tool_name = tool_info.get("name") or tool_name_attr or "unknown"
+                tool_input = tool_info.get("input", {})
+                tool_output = getattr(msg, "content", "")
+                tool_error = None
+
+                # Check if tool returned an error
+                if hasattr(msg, "status") and msg.status == "error":
+                    tool_error = str(tool_output)
+                    tool_output = None
+
+                logger.info("[inbox] Tracking tool call: name=%s, input_keys=%s, output_len=%d",
+                           tool_name, list(tool_input.keys()) if isinstance(tool_input, dict) else "N/A",
+                           len(str(tool_output)) if tool_output else 0)
+
+                try:
+                    task.tool(
+                        name=tool_name,
+                        input=tool_input,
+                        output=tool_output,
+                        error=tool_error,
+                    )
+                    tracked_tool_ids.add(tool_id)
+                    logger.info("[inbox] Successfully tracked tool call: %s", tool_name)
+                except Exception as e:
+                    logger.warning("[inbox] Failed to track tool call %s: %s", tool_name, e)
+
+    logger.debug("[inbox] _track_tool_calls: Found %d ToolMessages, tracked_ids now has %d entries",
+                tool_messages_found, len(tracked_tool_ids))
+
+
 def _inject_learnings(input_data: Any, learnings_text: str) -> Any:
     """Inject learnings as a system message into input data."""
     if not isinstance(input_data, dict):
@@ -202,6 +278,7 @@ def _marlo_stream(self, input_data, config=None, **kwargs):
 
         final_answer = ""
         total_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        tracked_tool_ids: set = set()
         try:
             for chunk in _original_stream(self, input_data, config, **kwargs):
                 # Extract data from 2-tuple: (event_type, data)
@@ -212,9 +289,12 @@ def _marlo_stream(self, input_data, config=None, **kwargs):
                     if event_type == "values" and isinstance(event_data, dict):
                         messages = event_data.get("messages", [])
                         if messages:
+                            # Track tool calls from messages
+                            _track_tool_calls(task, messages, tracked_tool_ids)
+
                             last = messages[-1]
                             content = getattr(last, "content", None)
-                            if content:
+                            if content and not isinstance(last, ToolMessage):
                                 final_answer = str(content)
 
                     # 'messages' event contains streaming chunks with usage
@@ -276,6 +356,7 @@ async def _marlo_astream(self, input_data, config=None, **kwargs):
 
         final_answer = ""
         total_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
+        tracked_tool_ids: set = set()
         try:
             async for chunk in _original_astream(self, input_data, config, **kwargs):
                 # Extract data from 2-tuple: (event_type, data)
@@ -286,9 +367,12 @@ async def _marlo_astream(self, input_data, config=None, **kwargs):
                     if event_type == "values" and isinstance(event_data, dict):
                         messages = event_data.get("messages", [])
                         if messages:
+                            # Track tool calls from messages
+                            _track_tool_calls(task, messages, tracked_tool_ids)
+
                             last = messages[-1]
                             content = getattr(last, "content", None)
-                            if content:
+                            if content and not isinstance(last, ToolMessage):
                                 final_answer = str(content)
 
                     # 'messages' event contains streaming chunks with usage
