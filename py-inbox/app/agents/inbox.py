@@ -6,6 +6,7 @@ Inbox Pilot Agent - Email and Calendar Management.
 This module creates a LangGraph ReAct agent for email and calendar management.
 """
 
+import asyncio
 import logging
 import os
 from functools import wraps
@@ -155,6 +156,23 @@ def get_current_task() -> Any:
     return _marlo_task_context
 
 
+def _inject_learnings(input_data: Any, learnings_text: str) -> Any:
+    """Inject learnings as a system message into input data."""
+    if not isinstance(input_data, dict):
+        return input_data
+
+    messages = input_data.get("messages", [])
+    if not isinstance(messages, list):
+        return input_data
+
+    from langchain_core.messages import SystemMessage
+
+    learnings_msg = SystemMessage(content=f"Learnings from past interactions:\n{learnings_text}")
+    new_messages = [learnings_msg] + list(messages)
+
+    return {**input_data, "messages": new_messages}
+
+
 _original_stream = _base_agent.__class__.stream
 _original_astream = _base_agent.__class__.astream
 
@@ -170,13 +188,28 @@ def _marlo_stream(self, input_data, config=None, **kwargs):
         user_input = _extract_user_input(input_data)
         task.input(user_input)
 
+        # Fetch and inject learnings
+        learnings = task.get_learnings()
+        logger.info("[inbox] Learnings response: %s", learnings)
+        if learnings:
+            learnings_text = learnings.get("learnings_text", "")
+            if learnings_text:
+                input_data = _inject_learnings(input_data, learnings_text)
+                logger.info("[inbox] Injected learnings into agent context")
+            else:
+                logger.info("[inbox] No learnings_text in response")
+        else:
+            logger.info("[inbox] No learnings returned")
+
         final_answer = ""
+        total_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         try:
             for chunk in _original_stream(self, input_data, config, **kwargs):
-                # Extract final answer from values events
-                if isinstance(chunk, tuple) and len(chunk) >= 3:
-                    event_type = chunk[1]
-                    event_data = chunk[2]
+                # Extract data from 2-tuple: (event_type, data)
+                if isinstance(chunk, tuple) and len(chunk) == 2:
+                    event_type, event_data = chunk
+
+                    # 'values' event contains final messages
                     if event_type == "values" and isinstance(event_data, dict):
                         messages = event_data.get("messages", [])
                         if messages:
@@ -184,11 +217,26 @@ def _marlo_stream(self, input_data, config=None, **kwargs):
                             content = getattr(last, "content", None)
                             if content:
                                 final_answer = str(content)
+
+                    # 'messages' event contains streaming chunks with usage
+                    elif event_type == "messages" and isinstance(event_data, tuple) and len(event_data) >= 1:
+                        msg_chunk = event_data[0]
+                        usage = getattr(msg_chunk, "usage_metadata", None)
+                        if usage:
+                            total_usage["input_tokens"] = usage.get("input_tokens", 0)
+                            total_usage["output_tokens"] = usage.get("output_tokens", 0)
+                            details = usage.get("output_token_details", {})
+                            total_usage["reasoning_tokens"] = details.get("reasoning", 0)
+
                 yield chunk
 
             task.llm(
                 model=MODEL_NAME,
-                usage={"input_tokens": 0, "output_tokens": 0},
+                usage={
+                    "prompt_tokens": total_usage["input_tokens"],
+                    "completion_tokens": total_usage["output_tokens"],
+                    "reasoning_tokens": total_usage["reasoning_tokens"],
+                },
                 messages=_extract_messages(input_data),
                 response=final_answer,
             )
@@ -212,13 +260,31 @@ async def _marlo_astream(self, input_data, config=None, **kwargs):
         user_input = _extract_user_input(input_data)
         task.input(user_input)
 
+        # Fetch and inject learnings (run in thread to avoid blocking event loop)
+        try:
+            learnings = await asyncio.to_thread(task.get_learnings)
+            logger.info("[inbox] Learnings response: %s", learnings)
+            if learnings:
+                learnings_text = learnings.get("learnings_text", "")
+                if learnings_text:
+                    input_data = _inject_learnings(input_data, learnings_text)
+                    logger.info("[inbox] Injected learnings into agent context")
+                else:
+                    logger.info("[inbox] No learnings_text in response")
+            else:
+                logger.info("[inbox] No learnings returned")
+        except Exception as e:
+            logger.warning("[inbox] Failed to fetch learnings: %s", e)
+
         final_answer = ""
+        total_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
         try:
             async for chunk in _original_astream(self, input_data, config, **kwargs):
-                # Extract final answer from values events
-                if isinstance(chunk, tuple) and len(chunk) >= 3:
-                    event_type = chunk[1]
-                    event_data = chunk[2]
+                # Extract data from 2-tuple: (event_type, data)
+                if isinstance(chunk, tuple) and len(chunk) == 2:
+                    event_type, event_data = chunk
+
+                    # 'values' event contains final messages
                     if event_type == "values" and isinstance(event_data, dict):
                         messages = event_data.get("messages", [])
                         if messages:
@@ -226,11 +292,26 @@ async def _marlo_astream(self, input_data, config=None, **kwargs):
                             content = getattr(last, "content", None)
                             if content:
                                 final_answer = str(content)
+
+                    # 'messages' event contains streaming chunks with usage
+                    elif event_type == "messages" and isinstance(event_data, tuple) and len(event_data) >= 1:
+                        msg_chunk = event_data[0]
+                        usage = getattr(msg_chunk, "usage_metadata", None)
+                        if usage:
+                            total_usage["input_tokens"] = usage.get("input_tokens", 0)
+                            total_usage["output_tokens"] = usage.get("output_tokens", 0)
+                            details = usage.get("output_token_details", {})
+                            total_usage["reasoning_tokens"] = details.get("reasoning", 0)
+
                 yield chunk
 
             task.llm(
                 model=MODEL_NAME,
-                usage={"input_tokens": 0, "output_tokens": 0},
+                usage={
+                    "prompt_tokens": total_usage["input_tokens"],
+                    "completion_tokens": total_usage["output_tokens"],
+                    "reasoning_tokens": total_usage["reasoning_tokens"],
+                },
                 messages=_extract_messages(input_data),
                 response=final_answer,
             )
