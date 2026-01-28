@@ -7,13 +7,22 @@ This module creates a LangGraph ReAct agent for email and calendar management.
 """
 
 import logging
+import os
+from functools import wraps
+from typing import Any
 
+import marlo
 from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
 from app.core.config import settings
 from app.prompts import SYSTEM_PROMPT
-import marlo
+
+# Initialize Marlo SDK for LangGraph server process
+_MARLO_API_KEY = os.getenv("MARLO_API_KEY") or getattr(settings, "MARLO_API_KEY", None)
+if _MARLO_API_KEY:
+    marlo.init(api_key=_MARLO_API_KEY)
+    logging.getLogger(__name__).info("[inbox] Marlo SDK initialized in LangGraph process")
 
 from app.agents.tools.email import (
     draft_reply,
@@ -89,11 +98,155 @@ def register_agent() -> None:
 # Register agent with Marlo on module load
 register_agent()
 
-# Create the agent
-agent = create_react_agent(
+# Create the base agent
+_base_agent = create_react_agent(
     model=llm,
     tools=tools,
     prompt=SYSTEM_PROMPT,
 )
 
-logger.info("[inbox] Agent created")
+logger.info("[inbox] Base agent created")
+
+
+# Marlo SDK Integration - Wrap agent stream methods
+_marlo_task_context: Any = None
+
+
+def _get_thread_id(config: dict | None) -> str:
+    """Extract thread_id from config."""
+    if config and isinstance(config, dict):
+        configurable = config.get("configurable", {})
+        if isinstance(configurable, dict):
+            return str(configurable.get("thread_id", "default"))
+    return "default"
+
+
+def _extract_user_input(input_data: Any) -> str:
+    """Extract user input text from input data."""
+    if isinstance(input_data, dict):
+        messages = input_data.get("messages", [])
+        if isinstance(messages, list) and messages:
+            last = messages[-1]
+            if hasattr(last, "content"):
+                return str(getattr(last, "content", ""))
+            if isinstance(last, dict):
+                return str(last.get("content", ""))
+    return ""
+
+
+def _extract_messages(input_data: Any) -> list:
+    """Extract messages list from input data."""
+    if isinstance(input_data, dict):
+        messages = input_data.get("messages", [])
+        if isinstance(messages, list):
+            return [
+                {
+                    "role": getattr(m, "type", "user") if hasattr(m, "type") else m.get("role", "user"),
+                    "content": getattr(m, "content", "") if hasattr(m, "content") else m.get("content", ""),
+                }
+                for m in messages
+            ]
+    return []
+
+
+def get_current_task() -> Any:
+    """Get the current task context for tool tracking."""
+    global _marlo_task_context
+    return _marlo_task_context
+
+
+_original_stream = _base_agent.__class__.stream
+_original_astream = _base_agent.__class__.astream
+
+
+@wraps(_original_stream)
+def _marlo_stream(self, input_data, config=None, **kwargs):
+    """Wrapped stream method with Marlo tracking."""
+    global _marlo_task_context
+    thread_id = _get_thread_id(config)
+
+    with marlo.task(thread_id=thread_id, agent=AGENT_NAME) as task:
+        _marlo_task_context = task
+        user_input = _extract_user_input(input_data)
+        task.input(user_input)
+
+        final_answer = ""
+        try:
+            for chunk in _original_stream(self, input_data, config, **kwargs):
+                # Extract final answer from values events
+                if isinstance(chunk, tuple) and len(chunk) >= 3:
+                    event_type = chunk[1]
+                    event_data = chunk[2]
+                    if event_type == "values" and isinstance(event_data, dict):
+                        messages = event_data.get("messages", [])
+                        if messages:
+                            last = messages[-1]
+                            content = getattr(last, "content", None)
+                            if content:
+                                final_answer = str(content)
+                yield chunk
+
+            task.llm(
+                model=MODEL_NAME,
+                usage={"input_tokens": 0, "output_tokens": 0},
+                messages=_extract_messages(input_data),
+                response=final_answer,
+            )
+            task.output(final_answer)
+
+        except Exception as exc:
+            task.error(str(exc))
+            raise
+        finally:
+            _marlo_task_context = None
+
+
+@wraps(_original_astream)
+async def _marlo_astream(self, input_data, config=None, **kwargs):
+    """Wrapped async stream method with Marlo tracking."""
+    global _marlo_task_context
+    thread_id = _get_thread_id(config)
+
+    with marlo.task(thread_id=thread_id, agent=AGENT_NAME) as task:
+        _marlo_task_context = task
+        user_input = _extract_user_input(input_data)
+        task.input(user_input)
+
+        final_answer = ""
+        try:
+            async for chunk in _original_astream(self, input_data, config, **kwargs):
+                # Extract final answer from values events
+                if isinstance(chunk, tuple) and len(chunk) >= 3:
+                    event_type = chunk[1]
+                    event_data = chunk[2]
+                    if event_type == "values" and isinstance(event_data, dict):
+                        messages = event_data.get("messages", [])
+                        if messages:
+                            last = messages[-1]
+                            content = getattr(last, "content", None)
+                            if content:
+                                final_answer = str(content)
+                yield chunk
+
+            task.llm(
+                model=MODEL_NAME,
+                usage={"input_tokens": 0, "output_tokens": 0},
+                messages=_extract_messages(input_data),
+                response=final_answer,
+            )
+            task.output(final_answer)
+
+        except Exception as exc:
+            task.error(str(exc))
+            raise
+        finally:
+            _marlo_task_context = None
+
+
+# Apply Marlo wrappers to agent
+_base_agent.__class__.stream = _marlo_stream
+_base_agent.__class__.astream = _marlo_astream
+
+logger.info("[inbox] Agent wrapped with Marlo tracking")
+
+agent = _base_agent
