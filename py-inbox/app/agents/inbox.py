@@ -190,16 +190,15 @@ def _marlo_stream(self, input_data, config=None, **kwargs):
 
         # Fetch and inject learnings
         learnings = task.get_learnings()
-        logger.info("[inbox] Learnings response: %s", learnings)
         if learnings:
-            learnings_text = learnings.get("learnings_text", "")
-            if learnings_text:
-                input_data = _inject_learnings(input_data, learnings_text)
-                logger.info("[inbox] Injected learnings into agent context")
-            else:
-                logger.info("[inbox] No learnings_text in response")
-        else:
-            logger.info("[inbox] No learnings returned")
+            active = learnings.get("active", [])
+            if active:
+                learnings_text = "\n".join(
+                    f"- {obj['learning']}" for obj in active if obj.get("learning")
+                )
+                if learnings_text:
+                    input_data = _inject_learnings(input_data, learnings_text)
+                    logger.info("[inbox] Injected %d learnings into agent context", len(active))
 
         final_answer = ""
         total_usage = {"input_tokens": 0, "output_tokens": 0, "reasoning_tokens": 0}
@@ -263,16 +262,15 @@ async def _marlo_astream(self, input_data, config=None, **kwargs):
         # Fetch and inject learnings (run in thread to avoid blocking event loop)
         try:
             learnings = await asyncio.to_thread(task.get_learnings)
-            logger.info("[inbox] Learnings response: %s", learnings)
             if learnings:
-                learnings_text = learnings.get("learnings_text", "")
-                if learnings_text:
-                    input_data = _inject_learnings(input_data, learnings_text)
-                    logger.info("[inbox] Injected learnings into agent context")
-                else:
-                    logger.info("[inbox] No learnings_text in response")
-            else:
-                logger.info("[inbox] No learnings returned")
+                active = learnings.get("active", [])
+                if active:
+                    learnings_text = "\n".join(
+                        f"- {obj['learning']}" for obj in active if obj.get("learning")
+                    )
+                    if learnings_text:
+                        input_data = _inject_learnings(input_data, learnings_text)
+                        logger.info("[inbox] Injected %d learnings into agent context", len(active))
         except Exception as e:
             logger.warning("[inbox] Failed to fetch learnings: %s", e)
 
