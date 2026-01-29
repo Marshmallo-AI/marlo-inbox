@@ -8,6 +8,7 @@ import asyncio
 from email.utils import parseaddr
 from typing import Any
 
+import marlo
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
@@ -63,6 +64,7 @@ def _send_email_sync(
 
 
 @tool
+@marlo.track_tool
 async def list_emails(max_results: int = 10, *, config: RunnableConfig) -> str:
     """List recent emails from the user's Gmail inbox."""
     emails = await asyncio.to_thread(_list_emails_sync, config, max_results)
@@ -70,6 +72,7 @@ async def list_emails(max_results: int = 10, *, config: RunnableConfig) -> str:
 
 
 @tool
+@marlo.track_tool
 async def get_email(email_id: str, *, config: RunnableConfig) -> str:
     """Get the full content of a specific email by ID, including the conversation thread."""
     email_data = await asyncio.to_thread(_get_email_sync, config, email_id, True)
@@ -77,6 +80,7 @@ async def get_email(email_id: str, *, config: RunnableConfig) -> str:
 
 
 @tool
+@marlo.track_tool
 async def search_emails(query: str, max_results: int = 10, *, config: RunnableConfig) -> str:
     """Search emails by query (sender, subject, content). Uses Gmail search syntax."""
     emails = await asyncio.to_thread(_search_emails_sync, config, query, max_results)
@@ -84,6 +88,7 @@ async def search_emails(query: str, max_results: int = 10, *, config: RunnableCo
 
 
 @tool
+@marlo.track_tool
 async def draft_reply(email_id: str, instructions: str, *, config: RunnableConfig) -> str:
     """Generate a reply draft for an email based on user instructions."""
     email_data = await asyncio.to_thread(_get_email_sync, config, email_id, False)
@@ -92,6 +97,7 @@ async def draft_reply(email_id: str, instructions: str, *, config: RunnableConfi
 
 
 @tool
+@marlo.track_tool
 async def send_email(
     to: str,
     subject: str,

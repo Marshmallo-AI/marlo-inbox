@@ -5,6 +5,7 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
 
+import marlo
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
@@ -106,6 +107,7 @@ def _delete_event_sync(config: RunnableConfig, event_id: str) -> None:
 
 
 @tool
+@marlo.track_tool
 async def get_schedule(date: str, days: int = 1, *, config: RunnableConfig) -> str:
     """Get calendar events for a specific date or date range. Date format: YYYY-MM-DD"""
     start_date = _parse_date(date)
@@ -123,6 +125,7 @@ async def get_schedule(date: str, days: int = 1, *, config: RunnableConfig) -> s
 
 
 @tool
+@marlo.track_tool
 async def check_availability(start_time: str, end_time: str, *, config: RunnableConfig) -> str:
     """Check if a specific time slot is free or has conflicts. Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"""
     time_min = _ensure_rfc3339(start_time)
@@ -139,6 +142,7 @@ async def check_availability(start_time: str, end_time: str, *, config: Runnable
 
 
 @tool
+@marlo.track_tool
 async def find_free_slots(date: str, duration_minutes: int = 30, *, config: RunnableConfig) -> str:
     """Find available time slots on a given date for a meeting of specified duration."""
     target_date = _parse_date(date)
@@ -180,6 +184,7 @@ async def find_free_slots(date: str, duration_minutes: int = 30, *, config: Runn
 
 
 @tool
+@marlo.track_tool
 async def create_event(
     title: str,
     start_time: str,
@@ -218,6 +223,7 @@ async def create_event(
 
 
 @tool
+@marlo.track_tool
 async def delete_event(event_id: str, *, config: RunnableConfig) -> str:
     """Delete or cancel a calendar event by ID."""
     await asyncio.to_thread(_delete_event_sync, config, event_id)
