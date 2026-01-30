@@ -2,21 +2,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import date, datetime, time, timedelta, timezone
+import os
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-import marlo
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import tool
 
-from app.core.google_tools import get_access_token_from_config, GoogleAuthError
+from app.core.google_tools import GoogleAuthError, get_access_token_from_config
 from app.services.calendar import CalendarService
+from app.services.mock_calendar import MockCalendarService
 
 logger = logging.getLogger(__name__)
 
 
-def _get_calendar_service(config: RunnableConfig) -> CalendarService:
+def _get_calendar_service(config: RunnableConfig) -> CalendarService | MockCalendarService:
     """Get Calendar service - must be called within asyncio.to_thread."""
+    # Use mock service if MOCK_CALENDAR env var is set
+    if os.getenv("MOCK_CALENDAR", "false").lower() == "true":
+        return MockCalendarService()
+
     access_token = get_access_token_from_config(config)
     if not access_token:
         raise GoogleAuthError("Not authenticated. Please log in first.")
@@ -38,7 +43,7 @@ def _ensure_rfc3339(value: str) -> str:
     normalized = value.replace("Z", "+00:00")
     parsed = datetime.fromisoformat(normalized)
     if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+        parsed = parsed.replace(tzinfo=UTC)
     return parsed.isoformat().replace("+00:00", "Z")
 
 
@@ -107,12 +112,11 @@ def _delete_event_sync(config: RunnableConfig, event_id: str) -> None:
 
 
 @tool
-@marlo.track_tool
 async def get_schedule(date: str, days: int = 1, *, config: RunnableConfig) -> str:
     """Get calendar events for a specific date or date range. Date format: YYYY-MM-DD"""
     start_date = _parse_date(date)
     span = max(days, 1)
-    start_dt = datetime.combine(start_date, time.min, tzinfo=timezone.utc)
+    start_dt = datetime.combine(start_date, time.min, tzinfo=UTC)
     end_dt = start_dt + timedelta(days=span)
     time_min = start_dt.isoformat().replace("+00:00", "Z")
     time_max = end_dt.isoformat().replace("+00:00", "Z")
@@ -125,7 +129,6 @@ async def get_schedule(date: str, days: int = 1, *, config: RunnableConfig) -> s
 
 
 @tool
-@marlo.track_tool
 async def check_availability(start_time: str, end_time: str, *, config: RunnableConfig) -> str:
     """Check if a specific time slot is free or has conflicts. Time format: ISO 8601 (YYYY-MM-DDTHH:MM:SS)"""
     time_min = _ensure_rfc3339(start_time)
@@ -142,14 +145,13 @@ async def check_availability(start_time: str, end_time: str, *, config: Runnable
 
 
 @tool
-@marlo.track_tool
 async def find_free_slots(date: str, duration_minutes: int = 30, *, config: RunnableConfig) -> str:
     """Find available time slots on a given date for a meeting of specified duration."""
     target_date = _parse_date(date)
     working_start = time(hour=9, minute=0)
     working_end = time(hour=18, minute=0)
-    start_dt = datetime.combine(target_date, working_start, tzinfo=timezone.utc)
-    end_dt = datetime.combine(target_date, working_end, tzinfo=timezone.utc)
+    start_dt = datetime.combine(target_date, working_start, tzinfo=UTC)
+    end_dt = datetime.combine(target_date, working_end, tzinfo=UTC)
     time_min = start_dt.isoformat().replace("+00:00", "Z")
     time_max = end_dt.isoformat().replace("+00:00", "Z")
     freebusy = await asyncio.to_thread(_check_availability_sync, config, time_min, time_max)
@@ -169,8 +171,7 @@ async def find_free_slots(date: str, duration_minutes: int = 30, *, config: Runn
     for busy_start, busy_end in busy_ranges:
         if busy_start > cursor and busy_start - cursor >= duration:
             free_slots.append((cursor, busy_start))
-        if busy_end > cursor:
-            cursor = busy_end
+        cursor = max(busy_end, cursor)
     if end_dt > cursor and end_dt - cursor >= duration:
         free_slots.append((cursor, end_dt))
 
@@ -184,7 +185,6 @@ async def find_free_slots(date: str, duration_minutes: int = 30, *, config: Runn
 
 
 @tool
-@marlo.track_tool
 async def create_event(
     title: str,
     start_time: str,
@@ -223,7 +223,6 @@ async def create_event(
 
 
 @tool
-@marlo.track_tool
 async def delete_event(event_id: str, *, config: RunnableConfig) -> str:
     """Delete or cancel a calendar event by ID."""
     await asyncio.to_thread(_delete_event_sync, config, event_id)
