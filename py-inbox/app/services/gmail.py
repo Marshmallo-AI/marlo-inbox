@@ -124,6 +124,40 @@ class GmailService:
         except HttpError as e:
             _handle_google_error(e, "send_message")
 
+    def batch_modify_messages(
+        self,
+        message_ids: list[str],
+        add_labels: list[str] | None = None,
+        remove_labels: list[str] | None = None,
+    ) -> dict[str, Any]:
+        """Modify multiple messages in a single API call.
+
+        Args:
+            message_ids: List of message IDs to modify
+            add_labels: Labels to add (e.g., ["STARRED", "IMPORTANT"])
+            remove_labels: Labels to remove (e.g., ["UNREAD", "INBOX"])
+
+        Common label IDs:
+            - INBOX, UNREAD, STARRED, IMPORTANT, TRASH, SPAM
+            - User labels can be retrieved via users().labels().list()
+
+        """
+        try:
+            body: dict[str, Any] = {"ids": message_ids}
+            if add_labels:
+                body["addLabelIds"] = add_labels
+            if remove_labels:
+                body["removeLabelIds"] = remove_labels
+
+            return (
+                self._service.users()
+                .messages()
+                .batchModify(userId="me", body=body)
+                .execute()
+            )
+        except HttpError as e:
+            _handle_google_error(e, "batch_modify_messages")
+
     def _get_message_metadata(self, message_id: str) -> dict[str, Any]:
         try:
             message = (

@@ -27,23 +27,14 @@ LLM tracking is handled separately via LangChain callback (MarloLLMCallback).
 """
 
 import logging
-from typing import Any, Generator, AsyncGenerator
+from collections.abc import AsyncGenerator, Generator
+from typing import Any
 
-from langchain_openai import ChatOpenAI
 from langchain_core.callbacks import BaseCallbackHandler
 from langchain_core.outputs import LLMResult
+from langchain_openai import ChatOpenAI
 from langgraph.prebuilt import create_react_agent
 
-from app.core.config import settings
-from app.prompts import SYSTEM_PROMPT
-
-from app.agents.tools.email import (
-    draft_reply,
-    get_email,
-    list_emails,
-    search_emails,
-    send_email,
-)
 from app.agents.tools.calendar import (
     check_availability,
     create_event,
@@ -51,6 +42,16 @@ from app.agents.tools.calendar import (
     find_free_slots,
     get_schedule,
 )
+from app.agents.tools.email import (
+    batch_process_emails,
+    draft_reply,
+    get_email,
+    list_emails,
+    search_emails,
+    send_email,
+)
+from app.core.config import settings
+from app.prompts import SYSTEM_PROMPT
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,9 @@ llm = ChatOpenAI(
     temperature=1,
     stream_usage=True,
     callbacks=[marlo_callback],
+    model_kwargs={
+        "reasoning_effort": "high",  # Enable extended reasoning for complex email/calendar tasks
+    },
 )
 
 tools = [
@@ -208,6 +212,7 @@ tools = [
     search_emails,
     draft_reply,
     send_email,
+    batch_process_emails,  # NEW: Process multiple emails at once
     # Calendar tools
     get_schedule,
     check_availability,
@@ -245,7 +250,7 @@ def _extract_user_input(payload: Any) -> str:
         if isinstance(messages, list) and messages:
             last = messages[-1]
             if hasattr(last, "content"):
-                return str(getattr(last, "content"))
+                return str(last.content)
             if isinstance(last, dict):
                 return str(last.get("content") or "")
     return ""
@@ -339,6 +344,7 @@ def _process_collected_messages(messages: list[Any], task: Any) -> str:
 
     Returns:
         Final answer string (empty if none found)
+
     """
     # Pending tool calls: {tool_call_id: {"name": str, "input": dict}}
     pending_tools: dict[str, dict] = {}
@@ -420,7 +426,9 @@ if MARLO_API_KEY:
     # Initialize the SDK in the LangGraph server process.
     # Use init_in_thread() to avoid blocking async contexts.
     # This is safe to call at module load time.
+    print(f"[marlo] Initializing SDK with API key: {MARLO_API_KEY[:20]}...{MARLO_API_KEY[-8:]}")
     marlo.init_in_thread(api_key=MARLO_API_KEY)
+    print("[marlo] SDK initialization started in background thread")
     logger.info("[marlo] SDK initialization started in background thread")
 
     # Register agent definition with Marlo
@@ -474,7 +482,6 @@ if MARLO_API_KEY:
         with marlo.task(
             thread_id=thread_id,
             agent=AGENT_NAME,
-            thread_name="Inbox Pilot Chat",
         ) as task:
             # Set global context for LLM callback
             _set_current_task(task)
@@ -552,13 +559,15 @@ if MARLO_API_KEY:
         user_input = _extract_user_input(input_data)
 
         # Open Marlo task context
+        print(f"[marlo] Opening task context for thread {thread_id}, agent {AGENT_NAME}")
+        logger.info(f"[marlo] Opening task context for thread {thread_id}, agent {AGENT_NAME}")
         with marlo.task(
             thread_id=thread_id,
             agent=AGENT_NAME,
-            thread_name="Inbox Pilot Chat",
         ) as task:
             _set_current_task(task)
             task.input(user_input)
+            print(f"[marlo] Async task started for thread {thread_id}")
             logger.info(f"[marlo] Async task started for thread {thread_id}")
 
             collected_messages: list[Any] = []
@@ -596,6 +605,7 @@ if MARLO_API_KEY:
 
                 final_answer = _process_collected_messages(unique_messages, task)
                 task.output(final_answer)
+                print(f"[marlo] Async task completed, final_answer length: {len(final_answer)}")
                 logger.info(f"[marlo] Async task completed, final_answer length: {len(final_answer)}")
 
             except Exception as exc:
