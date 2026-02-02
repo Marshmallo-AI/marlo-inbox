@@ -6,13 +6,6 @@ This project is an email and calendar assistant built with [LangGraph](https://l
 
 Available in both **Python** and **TypeScript**.
 
-## Platform
-
-<p align="center">
-  <img src="assets/rewards.png" width="48%" />
-  <img src="assets/learnings.png" width="48%" />
-</p>
-
 ## Quick Start
 
 ### 1. Clone the repository
