@@ -35,19 +35,20 @@ AGENT_NAME = "inbox-pilot"
 MODEL_NAME = "gpt-5"
 
 # === Tools (decorated with @marlo.track_tool) ===
-from app.agents.tools.email import (
-    draft_reply,
-    get_email,
-    list_emails,
-    search_emails,
-    send_email,
-)
 from app.agents.tools.calendar import (
     check_availability,
     create_event,
     delete_event,
     find_free_slots,
     get_schedule,
+)
+from app.agents.tools.email import (
+    batch_process_emails,
+    draft_reply,
+    get_email,
+    list_emails,
+    search_emails,
+    send_email,
 )
 
 tools = [
@@ -57,6 +58,7 @@ tools = [
     search_emails,
     draft_reply,
     send_email,
+    batch_process_emails,  # NEW: Process multiple emails at once
     # Calendar tools
     get_schedule,
     check_availability,
@@ -103,6 +105,9 @@ llm = ChatOpenAI(
     api_key=settings.OPENAI_API_KEY,
     temperature=1,
     stream_usage=True,
+    model_kwargs={
+        "reasoning_effort": "high",  # Enable extended reasoning for complex email/calendar tasks
+    },
 )
 
 # === Create Agent ===
@@ -174,11 +179,11 @@ async def run_with_marlo(
     - marlo.instrument_openai() called at module init
     """
     thread_id = get_thread_id(config)
-    
+
     with marlo.task(thread_id=thread_id, agent=AGENT_NAME) as task:
         user_input = extract_user_input(input_data)
         task.input(user_input)
-        
+
         # Fetch and inject learnings
         try:
             learnings = await asyncio.to_thread(task.get_learnings)
@@ -193,7 +198,7 @@ async def run_with_marlo(
                         logger.info("[inbox] Injected %d learnings", len(active))
         except Exception as e:
             logger.warning("[inbox] Failed to fetch learnings: %s", e)
-        
+
         final_answer = ""
         try:
             async for chunk in agent.astream(input_data, config, **kwargs):
@@ -208,9 +213,9 @@ async def run_with_marlo(
                             if content and not hasattr(last, "tool_call_id"):
                                 final_answer = str(content)
                 yield chunk
-            
+
             task.output(final_answer)
-            
+
         except Exception as exc:
             task.error(str(exc))
             raise
